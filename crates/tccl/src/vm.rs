@@ -7,8 +7,20 @@
 //!   items, call depth to 16.
 //! * No floating point, no clock, no randomness: the same call on the same
 //!   state always gives the same result on every node.
+//!
+//! Version 2 programs additionally get:
+//! * **calls to other contracts** through interfaces: the callee sees the calling
+//!   contract as `caller`, `origin` stays the signer; fuel is shared;
+//! * **re-entrancy protection**: a contract that is already running in the
+//!   transaction cannot be called again (always on, cannot be disabled);
+//! * **atomicity**: any failure anywhere aborts the whole transaction, and the
+//!   host discards every change made by every contract involved;
+//! * a **memory limit** on the values held by running functions;
+//! * **enum transitions** checked whenever a value is stored.
+//!
+//! Version 1 programs run exactly as on The Coin v0.2.0.
 
-use crate::ast::BinOp;
+use crate::program::BinOp;
 use crate::error::VmError;
 use crate::ops::{self, MAX_LIST_LEN, MAX_VALUE_BYTES};
 use crate::program::*;
@@ -16,6 +28,10 @@ use sha2::Digest;
 
 pub const MAX_CALL_DEPTH: usize = 16;
 pub const MAX_RING_SIZE: usize = 64;
+/// Most contracts on the call stack of one transaction (version 2).
+pub const MAX_CONTRACT_DEPTH: usize = 8;
+/// Bytes of values that the functions running in a transaction may hold (version 2).
+pub const MAX_MEMORY_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Fuel schedule (consensus-critical).
 /// Fuel prices. Calibrated with `tests/fuel_bench.rs` and the node's
@@ -40,6 +56,21 @@ pub mod fuel {
     pub const DESTROY: u64 = 1_000;
     /// Charged by the host per byte of source code when deploying.
     pub const COMPILE_PER_BYTE: u64 = 5;
+    /// Version 2: a call to another contract, plus [`LOAD_BASE`] + 1 per [`LOAD_PER_BYTES`] of its code.
+    pub const CALL_CONTRACT: u64 = 700;
+    pub const LOAD_BASE: u64 = 100;
+    pub const LOAD_PER_BYTES: u64 = 100;
+    /// Version 2: `mul_div`, `isqrt`, `pow`.
+    pub const MATH: u64 = 30;
+}
+
+/// Facts about a contract that other contracts may inspect (version 2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContractInfo {
+    /// BLAKE3 of the compiled program.
+    pub code_hash: [u8; 32],
+    /// Whether an upgrade authority can still replace the code.
+    pub upgradeable: bool,
 }
 
 /// Execution context of a call.
@@ -67,6 +98,28 @@ pub trait Host {
     fn storage_items(&mut self) -> Result<u64, VmError>;
     /// Removes the contract, paying its remaining balance to `to`.
     fn destroy(&mut self, to: &[u8; 20]) -> Result<(), VmError>;
+
+    // ---- version 2 (defaults: calls between contracts are not available) ----
+
+    /// Starts a call from `caller` (the running contract) into `callee`: moves
+    /// `value` motes from caller to callee and makes `callee` the current contract
+    /// for storage, balance, events and sends. Returns the callee program and the
+    /// size of its code, or `None` if there is no contract at `callee` (nothing changed).
+    fn enter_contract(&mut self, caller: &[u8; 20], callee: &[u8; 20], value: u64) -> Result<Option<(std::sync::Arc<Program>, usize)>, VmError> {
+        let _ = (caller, callee, value);
+        Err(VmError::Unsupported("calls between contracts are not enabled on this network".into()))
+    }
+
+    /// Ends the call started by the last successful `enter_contract`.
+    fn leave_contract(&mut self) -> Result<(), VmError> {
+        Ok(())
+    }
+
+    /// Code hash and upgradeability of a contract, `None` if `addr` is not a contract.
+    fn contract_info(&mut self, addr: &[u8; 20]) -> Result<Option<ContractInfo>, VmError> {
+        let _ = addr;
+        Ok(None)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +130,8 @@ pub enum Mode {
     Action,
     /// Read-only query of a `view`.
     View,
+    /// Version 2: the upgrade transaction runs `upgrade()` (if any) of the new code.
+    Upgrade,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -124,6 +179,12 @@ struct Vm<'a, H: Host> {
     fuel_left: u64,
     depth: usize,
     read_only: bool,
+    // ---- version 2 ----
+    origin: [u8; 20],
+    /// Contracts running in this transaction (outermost first).
+    stack: Vec<[u8; 20]>,
+    contract_depth: usize,
+    mem_used: u64,
 }
 
 /// Runs `function` of `program`.
@@ -138,7 +199,18 @@ pub fn execute<H: Host>(
     host: &mut H,
     fuel_limit: u64,
 ) -> Outcome {
-    let mut vm = Vm { program, host, ctx, fuel_left: fuel_limit, depth: 0, read_only: mode == Mode::View };
+    let mut vm = Vm {
+        program,
+        host,
+        ctx,
+        fuel_left: fuel_limit,
+        depth: 0,
+        read_only: mode == Mode::View,
+        origin: ctx.caller,
+        stack: vec![ctx.self_address],
+        contract_depth: 0,
+        mem_used: 0,
+    };
     let result = vm.run(mode, function, args);
     Outcome { result, fuel_used: fuel_limit - vm.fuel_left }
 }
@@ -183,6 +255,19 @@ impl<'a, H: Host> Vm<'a, H> {
                     }
                 }
             }
+            Mode::Upgrade => {
+                if self.program.version < 2 {
+                    return Err(VmError::Unsupported("upgrades need language version 2".into()));
+                }
+                if self.ctx.value > 0 {
+                    return Err(VmError::NotPayable);
+                }
+                match self.program.functions.iter().position(|f| f.kind == FnKind::Upgrade) {
+                    Some(idx) => self.call_entry(idx as u16, args),
+                    None if args.is_empty() => Ok(Value::Unit),
+                    None => Err(VmError::BadArguments("this program has no upgrade()".into())),
+                }
+            }
             Mode::Action | Mode::View => {
                 let (idx, f) = self.program.find(function).ok_or_else(|| VmError::UnknownFunction(function.to_string()))?;
                 let expected = if mode == Mode::Action { FnKind::Action } else { FnKind::View };
@@ -203,12 +288,28 @@ impl<'a, H: Host> Vm<'a, H> {
             return Err(VmError::BadArguments(format!("{} expects {} argument(s), got {}", f.name, f.params.len(), args.len())));
         }
         for (i, (a, (name, t))) in args.iter().zip(f.params.iter()).enumerate() {
-            if !a.has_type(t) {
-                return Err(VmError::BadArguments(format!("argument {} ({name}) must be {t}", i + 1)));
+            if !self.program.value_has_type(a, t) {
+                return Err(VmError::BadArguments(format!("argument {} ({name}) must be {}", i + 1, self.program.type_name(t))));
             }
             check_size(a)?;
         }
         self.call(idx, args)
+    }
+
+    fn v2(&self) -> bool {
+        self.program.version >= 2
+    }
+
+    /// Version 2 memory accounting: `delta` bytes more (or fewer) held by locals.
+    fn memory(&mut self, add: u64, remove: u64) -> Result<(), VmError> {
+        if !self.v2() {
+            return Ok(());
+        }
+        self.mem_used = self.mem_used.saturating_sub(remove).saturating_add(add);
+        if self.mem_used > MAX_MEMORY_BYTES {
+            return Err(VmError::MemoryLimit(MAX_MEMORY_BYTES));
+        }
+        Ok(())
     }
 
     fn call(&mut self, idx: u16, args: Vec<Value>) -> Result<Value, VmError> {
@@ -220,10 +321,16 @@ impl<'a, H: Host> Vm<'a, H> {
         let program = self.program;
         let f = &program.functions[idx as usize];
         let mut locals = vec![Value::Unit; f.locals as usize];
+        let arg_bytes: u64 = args.iter().map(|a| a.size() as u64).sum();
+        self.memory(arg_bytes + f.locals as u64, 0)?;
         for (i, a) in args.into_iter().enumerate() {
             locals[i] = a;
         }
         let flow = self.block(&f.body, &mut locals)?;
+        if self.v2() {
+            let held: u64 = locals.iter().map(|v| v.size() as u64).sum::<u64>() + f.locals as u64;
+            self.mem_used = self.mem_used.saturating_sub(held);
+        }
         self.depth -= 1;
         Ok(match flow {
             Flow::Return(v) => v,
@@ -254,6 +361,7 @@ impl<'a, H: Host> Vm<'a, H> {
         match s {
             Stmt::SetLocal { slot, value } => {
                 let v = self.eval(value, locals)?;
+                self.memory(v.size() as u64, locals[*slot as usize].size() as u64)?;
                 locals[*slot as usize] = v;
             }
             Stmt::SetState { var, value } => {
@@ -269,7 +377,7 @@ impl<'a, H: Host> Vm<'a, H> {
                 let Type::Map(_, vt) = &self.program.states[*var as usize].ty else {
                     return Err(VmError::Type("not a map".into()));
                 };
-                let default = Value::default_for(vt);
+                let default = self.program.default_value(vt);
                 let key = map_key(*var, &k);
                 if v == default {
                     self.write(&key, None)?;
@@ -308,7 +416,9 @@ impl<'a, H: Host> Vm<'a, H> {
                     return Err(VmError::Type("not a list".into()));
                 };
                 let idx = check_index(i, items.len() as u64)? as usize;
+                let (add, remove) = (v.size() as u64, items[idx].size() as u64);
                 items[idx] = v;
+                self.memory(add, remove)?;
             }
             Stmt::PushLocalList { slot, value } => {
                 let v = self.eval(value, locals)?;
@@ -319,7 +429,9 @@ impl<'a, H: Host> Vm<'a, H> {
                     return Err(VmError::TooLarge);
                 }
                 self.charge(fuel::EXPR + v.size() as u64 / 32)?;
+                let add = v.size() as u64;
                 items.push(v);
+                self.memory(add, 0)?;
             }
             Stmt::If { cond, then, els } => {
                 return if self.eval_bool(cond, locals)? { self.block(then, locals) } else { self.block(els, locals) };
@@ -419,6 +531,9 @@ impl<'a, H: Host> Vm<'a, H> {
             }
             Stmt::Destroy { to } => {
                 self.mutation()?;
+                if self.contract_depth > 0 {
+                    return Err(VmError::DestroyInNestedCall);
+                }
                 self.charge(fuel::DESTROY)?;
                 let Value::Address(addr) = self.eval(to, locals)? else {
                     return Err(VmError::Type("not an address".into()));
@@ -462,7 +577,7 @@ impl<'a, H: Host> Vm<'a, H> {
     }
 
     fn write_scalar(&mut self, var: u16, ty: &Type, v: Value) -> Result<(), VmError> {
-        if v == Value::default_for(ty) {
+        if v == self.program.default_value(ty) {
             self.write(&scalar_key(var), None)
         } else {
             self.write(&scalar_key(var), Some(borsh::to_vec(&v).expect("serializable")))
@@ -528,10 +643,11 @@ impl<'a, H: Host> Vm<'a, H> {
                 v
             }
             Expr::State(var) => {
-                let ty = &self.program.states[*var as usize].ty;
+                let program = self.program;
+                let ty = &program.states[*var as usize].ty;
                 match self.read(&scalar_key(*var))? {
                     Some(b) => Self::decode_value(&b)?,
-                    None => Value::default_for(ty),
+                    None => program.default_value(ty),
                 }
             }
             Expr::MapGet { var, key } => {
@@ -539,7 +655,7 @@ impl<'a, H: Host> Vm<'a, H> {
                 let Type::Map(_, vt) = &self.program.states[*var as usize].ty else {
                     return Err(VmError::Type("not a map".into()));
                 };
-                let default = Value::default_for(vt);
+                let default = self.program.default_value(vt);
                 match self.read(&map_key(*var, &k))? {
                     Some(b) => Self::decode_value(&b)?,
                     None => default,
@@ -613,9 +729,164 @@ impl<'a, H: Host> Vm<'a, H> {
                 Ctx::Balance => Value::Int(self.host.balance()? as i128),
                 Ctx::Height => Value::Int(self.ctx.height as i128),
                 Ctx::SelfAddress => Value::Address(self.ctx.self_address),
+                Ctx::Origin => Value::Address(self.origin),
             },
             Expr::Builtin { f, args } => self.builtin(*f, args, locals)?,
+            Expr::Replace { base, index, value } => {
+                let Value::List(mut items) = self.eval(base, locals)? else {
+                    return Err(VmError::Type("not a record".into()));
+                };
+                let v = self.eval(value, locals)?;
+                let slot = items.get_mut(*index as usize).ok_or_else(|| VmError::Type("bad field".into()))?;
+                *slot = v;
+                let out = Value::List(items);
+                check_size(&out)?;
+                out
+            }
+            Expr::Transition { ty, from, to } => {
+                let old = self.eval(from, locals)?;
+                let new = self.eval(to, locals)?;
+                self.check_transition(ty, &old, &new, 0)?;
+                new
+            }
+            Expr::CallContract { target, function, kind, params, ret, args, value } => {
+                let Value::Address(addr) = self.eval(target, locals)? else {
+                    return Err(VmError::Type("not an address".into()));
+                };
+                let mut vals = Vec::with_capacity(args.len());
+                for a in args {
+                    vals.push(self.eval(a, locals)?);
+                }
+                let amount = match value {
+                    Some(v) => {
+                        let a = self.eval_int(v, locals)?;
+                        if a < 0 || a > u64::MAX as i128 {
+                            return Err(VmError::BadAmount);
+                        }
+                        a as u64
+                    }
+                    None => 0,
+                };
+                self.call_contract(addr, function, *kind, params, ret, vals, amount)?
+            }
         })
+    }
+
+    fn check_transition(&mut self, ty: &Type, old: &Value, new: &Value, depth: usize) -> Result<(), VmError> {
+        if depth > MAX_VALUE_DEPTH {
+            return Err(VmError::TooLarge);
+        }
+        self.charge(fuel::EXPR)?;
+        let program = self.program;
+        match (ty, old, new) {
+            (Type::Enum(e), Value::Int(a), Value::Int(b)) => {
+                let def = program.enums.get(*e as usize).ok_or_else(|| VmError::Type("bad enum".into()))?;
+                if a == b {
+                    return Ok(());
+                }
+                if let Some(table) = &def.transitions {
+                    let allowed = table.get(*a as usize).is_some_and(|next| next.iter().any(|n| *n as i128 == *b));
+                    if !allowed {
+                        let name = |i: i128| def.variants.get(i as usize).cloned().unwrap_or_else(|| i.to_string());
+                        return Err(VmError::TransitionNotAllowed { enum_name: def.name.clone(), from: name(*a), to: name(*b) });
+                    }
+                }
+                Ok(())
+            }
+            (Type::Record(r), Value::List(xs), Value::List(ys)) => {
+                let def = program.records.get(*r as usize).ok_or_else(|| VmError::Type("bad record".into()))?;
+                for ((_, ft), (x, y)) in def.fields.iter().zip(xs.iter().zip(ys.iter())) {
+                    self.check_transition(ft, x, y, depth + 1)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn call_contract(&mut self, target: [u8; 20], function: &str, kind: FnKind, params: &[Type], ret: &Type, args: Vec<Value>, value: u64) -> Result<Value, VmError> {
+        if self.read_only && (kind == FnKind::Action || value > 0) {
+            return Err(VmError::ReadOnly);
+        }
+        let arg_bytes: u64 = args.iter().map(|a| a.size() as u64).sum();
+        self.charge(fuel::CALL_CONTRACT + arg_bytes / 32 * fuel::PER_32_BYTES)?;
+        if self.contract_depth + 1 >= MAX_CONTRACT_DEPTH {
+            return Err(VmError::ContractDepth);
+        }
+        if self.depth >= MAX_CALL_DEPTH {
+            return Err(VmError::CallDepth);
+        }
+        if self.stack.contains(&target) {
+            return Err(VmError::Reentrancy(hex::encode(target)));
+        }
+        let Some((program, code_len)) = self.host.enter_contract(&self.ctx.self_address, &target, value)? else {
+            return Err(VmError::NoContract(hex::encode(target)));
+        };
+        let result = self.run_callee(&program, code_len, target, function, kind, params, ret, args, value);
+        let left = self.host.leave_contract();
+        let v = result?;
+        left?;
+        Ok(v)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_callee(
+        &mut self,
+        program: &Program,
+        code_len: usize,
+        target: [u8; 20],
+        function: &str,
+        kind: FnKind,
+        params: &[Type],
+        ret: &Type,
+        args: Vec<Value>,
+        value: u64,
+    ) -> Result<Value, VmError> {
+        self.charge(fuel::LOAD_BASE + code_len as u64 / fuel::LOAD_PER_BYTES)?;
+        let (idx, f) = program.find(function).ok_or_else(|| VmError::UnknownFunction(function.to_string()))?;
+        if f.kind != kind {
+            return Err(VmError::NotCallable(function.to_string()));
+        }
+        let portable = |t: &Type| match t {
+            Type::Interface(_) => Type::Address,
+            other => other.clone(),
+        };
+        let callee_params: Vec<Type> = f.params.iter().map(|(_, t)| portable(t)).collect();
+        if callee_params != params || portable(&f.ret) != *ret {
+            let shown = |ps: &[Type], r: &Type| format!("({}) -> {}", ps.iter().map(|t| program.type_name(t)).collect::<Vec<_>>().join(", "), program.type_name(r));
+            return Err(VmError::InterfaceMismatch(format!(
+                "'{function}' is {} {} in the called contract but {} in the interface",
+                if f.kind == FnKind::View { "view" } else { "action" },
+                shown(&callee_params, &portable(&f.ret)),
+                shown(params, ret)
+            )));
+        }
+        if value > 0 && !f.payable {
+            return Err(VmError::NotPayable);
+        }
+        let ctx = CallContext { caller: self.ctx.self_address, value, height: self.ctx.height, self_address: target };
+        let mut stack = std::mem::take(&mut self.stack);
+        stack.push(target);
+        let mut child = Vm {
+            program,
+            host: &mut *self.host,
+            ctx: &ctx,
+            fuel_left: self.fuel_left,
+            depth: self.depth + 1,
+            read_only: self.read_only || kind == FnKind::View,
+            origin: self.origin,
+            stack,
+            contract_depth: self.contract_depth + 1,
+            mem_used: self.mem_used,
+        };
+        let r = child.call_entry(idx, args);
+        self.fuel_left = child.fuel_left;
+        self.mem_used = child.mem_used;
+        let mut stack = std::mem::take(&mut child.stack);
+        stack.pop();
+        self.stack = stack;
+        r
     }
 
     fn builtin(&mut self, f: Builtin, args: &[Expr], locals: &[Value]) -> Result<Value, VmError> {
@@ -717,6 +988,43 @@ impl<'a, H: Host> Vm<'a, H> {
                 Value::Address(a)
             }
             Builtin::ZeroAddress => Value::Address([0u8; 20]),
+            Builtin::MulDiv => {
+                let a = self.eval_int(&args[0], locals)?;
+                let b = self.eval_int(&args[1], locals)?;
+                let c = self.eval_int(&args[2], locals)?;
+                self.charge(fuel::MATH)?;
+                Value::Int(ops::mul_div(a, b, c)?)
+            }
+            Builtin::Isqrt => {
+                let x = self.eval_int(&args[0], locals)?;
+                self.charge(fuel::MATH)?;
+                Value::Int(ops::isqrt(x)?)
+            }
+            Builtin::Pow => {
+                let base = self.eval_int(&args[0], locals)?;
+                let exp = self.eval_int(&args[1], locals)?;
+                self.charge(fuel::MATH)?;
+                Value::Int(ops::pow(base, exp)?)
+            }
+            Builtin::CodeHash | Builtin::IsContract | Builtin::IsFinal => {
+                let Value::Address(addr) = self.eval(&args[0], locals)? else {
+                    return Err(VmError::Type("address".into()));
+                };
+                self.charge(fuel::STORAGE_READ)?;
+                let info = self.host.contract_info(&addr)?;
+                match f {
+                    Builtin::CodeHash => Value::Bytes(info.map(|i| i.code_hash.to_vec()).unwrap_or_default()),
+                    Builtin::IsContract => Value::Bool(info.is_some()),
+                    _ => Value::Bool(info.is_some_and(|i| !i.upgradeable)),
+                }
+            }
+            Builtin::TextOfEnum => {
+                let e = self.eval_int(&args[0], locals)?;
+                let v = self.eval_int(&args[1], locals)?;
+                let program = self.program;
+                let def = program.enums.get(e as usize).ok_or_else(|| VmError::Type("bad enum".into()))?;
+                Value::Text(def.variants.get(v as usize).cloned().ok_or_else(|| VmError::Type("bad variant".into()))?)
+            }
         })
     }
 }

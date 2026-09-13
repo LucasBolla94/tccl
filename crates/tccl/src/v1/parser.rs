@@ -1,8 +1,7 @@
-//! Recursive-descent parser for language version 2. Nesting depth is bounded so
-//! hostile source code cannot exhaust the stack of the nodes that compile it.
-//! Every version 1 source parses to the same tree as in [`crate::v1::parser`].
+//! Recursive-descent parser. Nesting depth is bounded so hostile source code
+//! cannot exhaust the stack of the nodes that compile it.
 
-use crate::ast::*;
+use crate::v1::ast::*;
 use crate::error::{CompileError, Pos};
 use crate::v1::lexer::{tokenize, Tok, Token};
 
@@ -20,9 +19,6 @@ fn expr_depth(e: &Expr) -> usize {
         Expr::Unary(_, x, _) => expr_depth(x),
         Expr::Binary(_, l, r, _) | Expr::Index(l, r, _) => expr_depth(l).max(expr_depth(r)),
         Expr::Method(x, _, args, _) => args.iter().map(expr_depth).max().unwrap_or(0).max(expr_depth(x)),
-        Expr::Field(x, _, _) => expr_depth(x),
-        Expr::Construct(x, fields, _) => fields.iter().map(|(_, e, _)| expr_depth(e)).max().unwrap_or(0).max(expr_depth(x)),
-        Expr::WithValue(x, v, _) => expr_depth(x).max(expr_depth(v)),
     }
 }
 
@@ -34,20 +30,10 @@ struct Parser {
 
 type PResult<T> = Result<T, CompileError>;
 
-/// Most `module` sections in one source file.
-pub const MAX_UNITS: usize = 16;
-
-/// Parses a source file: a contract optionally followed by `module` sections, or
-/// only `module` sections (a library).
-pub fn parse_file(src: &str) -> PResult<SourceFile> {
+pub fn parse(src: &str) -> PResult<Contract> {
     let toks = tokenize(src)?;
     let mut p = Parser { toks, i: 0, depth: 0 };
-    p.file()
-}
-
-/// Contextual keyword check (`record`, `only`, `with`, ...).
-fn is_word(t: &Tok, word: &str) -> bool {
-    matches!(t, Tok::Ident(s) if s == word)
+    p.contract()
 }
 
 fn describe(t: &Tok) -> String {
@@ -129,219 +115,31 @@ impl Parser {
         while self.eat(&Tok::Newline) {}
     }
 
-    fn peek_at(&self, n: usize) -> &Tok {
-        &self.toks[(self.i + n).min(self.toks.len() - 1)].tok
-    }
-
-    fn word(&self, w: &str) -> bool {
-        is_word(self.peek(), w)
-    }
-
-    fn file(&mut self) -> PResult<SourceFile> {
+    fn contract(&mut self) -> PResult<Contract> {
         self.skip_newlines();
-        let mut units = Vec::new();
-        loop {
-            self.skip_newlines();
-            if self.check(&Tok::Eof) {
-                break;
-            }
-            let pos = self.pos();
-            let kind = if self.check(&Tok::Contract) {
-                if !units.is_empty() {
-                    return Err(CompileError::new(pos, "only one contract per file; it must come before any module"));
-                }
-                UnitKind::Contract
-            } else if self.word("module") {
-                UnitKind::Module
-            } else if units.is_empty() {
-                return Err(CompileError::new(pos, format!("expected 'contract <Name>' as the first line, found {}", describe(self.peek()))));
-            } else {
-                return Err(CompileError::new(pos, format!("expected a declaration, found {}", describe(self.peek()))));
-            };
-            if units.len() >= MAX_UNITS {
-                return Err(CompileError::new(pos, format!("too many modules in one file (max {MAX_UNITS})")));
-            }
-            self.advance();
-            let (name, _) = self.ident(if kind == UnitKind::Contract { "contract name" } else { "module name" })?;
-            self.expect(&Tok::Newline, if kind == UnitKind::Contract { "end of line after contract name" } else { "end of line after module name" })?;
-            let items = self.items()?;
-            units.push(Unit { kind, name, pos, items });
-        }
-        if units.is_empty() {
-            return Err(CompileError::new(self.pos(), "expected 'contract <Name>' as the first line, found end of file"));
-        }
-        Ok(SourceFile { units })
-    }
-
-    fn items(&mut self) -> PResult<Vec<Item>> {
+        let pos = self.pos();
+        self.expect(&Tok::Contract, "'contract <Name>' as the first line")?;
+        let (name, _) = self.ident("contract name")?;
+        self.expect(&Tok::Newline, "end of line after contract name")?;
         let mut items = Vec::new();
         loop {
             self.skip_newlines();
             match self.peek() {
                 Tok::Eof => break,
-                Tok::Ident(w) if w == "module" => break,
                 Tok::Const => items.push(self.const_item()?),
                 Tok::State => items.push(self.state_item()?),
                 Tok::Event => items.push(self.event_item()?),
                 Tok::Init | Tok::Action | Tok::View | Tok::Fn => items.push(Item::Func(self.func()?)),
-                Tok::Ident(w) if w == "record" => items.push(self.record_item()?),
-                Tok::Ident(w) if w == "enum" => items.push(self.enum_item()?),
-                Tok::Ident(w) if w == "interface" => items.push(self.interface_item()?),
-                Tok::Ident(w) if w == "role" => items.push(self.role_item()?),
-                Tok::Ident(w) if w == "use" => items.push(self.use_item()?),
-                Tok::Ident(w) if w == "upgrade" && matches!(self.peek_at(1), Tok::LParen) => items.push(Item::Func(self.func()?)),
-                Tok::Contract => return Err(CompileError::new(self.pos(), "only one contract per file; it must come before any module")),
                 Tok::Indent => return Err(CompileError::new(self.pos(), "unexpected indentation at top level")),
                 other => {
                     return Err(CompileError::new(
                         self.pos(),
-                        format!(
-                            "expected const, state, event, init, action, view, fn, record, enum, interface, role, use or upgrade, found {}",
-                            describe(other)
-                        ),
+                        format!("expected const, state, event, init, action, view or fn, found {}", describe(other)),
                     ))
                 }
             }
         }
-        Ok(items)
-    }
-
-    fn record_item(&mut self) -> PResult<Item> {
-        let pos = self.advance().pos;
-        let (name, _) = self.ident("record name")?;
-        self.expect(&Tok::Colon, "':' after the record name")?;
-        self.expect(&Tok::Newline, "end of line after ':'")?;
-        self.skip_newlines();
-        self.expect(&Tok::Indent, "indented fields ('name: type', one per line)")?;
-        let mut fields = Vec::new();
-        loop {
-            self.skip_newlines();
-            if self.eat(&Tok::Dedent) || self.check(&Tok::Eof) {
-                break;
-            }
-            let (fname, fpos) = self.ident("field name")?;
-            self.expect(&Tok::Colon, "':' and the field type")?;
-            let ty = self.type_expr()?;
-            self.end_stmt()?;
-            fields.push(Param { name: fname, ty, pos: fpos });
-        }
-        if fields.is_empty() {
-            return Err(CompileError::new(pos, "a record needs at least one field"));
-        }
-        Ok(Item::Record { name, fields, pos })
-    }
-
-    fn variant(&mut self) -> PResult<Variant> {
-        let (name, pos) = self.ident("variant name")?;
-        let mut next = Vec::new();
-        if self.eat(&Tok::Arrow) {
-            loop {
-                next.push(self.ident("next variant name")?);
-                if !self.eat(&Tok::Comma) {
-                    break;
-                }
-            }
-        }
-        Ok(Variant { name, next, pos })
-    }
-
-    fn enum_item(&mut self) -> PResult<Item> {
-        let pos = self.advance().pos;
-        let (name, _) = self.ident("enum name")?;
-        self.expect(&Tok::Colon, "':' after the enum name")?;
-        let mut variants = Vec::new();
-        let transitions;
-        if self.check(&Tok::Newline) {
-            // Block form: one variant per line, optionally `A -> B, C`.
-            self.advance();
-            self.skip_newlines();
-            self.expect(&Tok::Indent, "indented variants, one per line")?;
-            loop {
-                self.skip_newlines();
-                if self.eat(&Tok::Dedent) || self.check(&Tok::Eof) {
-                    break;
-                }
-                variants.push(self.variant()?);
-                self.end_stmt()?;
-            }
-        } else {
-            // Inline form: `enum Color: Red, Green, Blue`
-            loop {
-                let (vname, vpos) = self.ident("variant name")?;
-                variants.push(Variant { name: vname, next: Vec::new(), pos: vpos });
-                if !self.eat(&Tok::Comma) {
-                    break;
-                }
-            }
-            self.expect(&Tok::Newline, "end of line")?;
-        }
-        transitions = variants.iter().any(|v| !v.next.is_empty());
-        if variants.is_empty() {
-            return Err(CompileError::new(pos, "an enum needs at least one variant"));
-        }
-        Ok(Item::Enum { name, variants, transitions, pos })
-    }
-
-    fn interface_item(&mut self) -> PResult<Item> {
-        let pos = self.advance().pos;
-        let (name, _) = self.ident("interface name")?;
-        self.expect(&Tok::Colon, "':' after the interface name")?;
-        self.expect(&Tok::Newline, "end of line after ':'")?;
-        self.skip_newlines();
-        self.expect(&Tok::Indent, "indented 'action' or 'view' signatures")?;
-        let mut functions = Vec::new();
-        loop {
-            self.skip_newlines();
-            if self.eat(&Tok::Dedent) || self.check(&Tok::Eof) {
-                break;
-            }
-            let fpos = self.pos();
-            let kind = match self.peek() {
-                Tok::Action => FuncKind::Action,
-                Tok::View => FuncKind::View,
-                other => {
-                    return Err(CompileError::new(fpos, format!("an interface lists 'action' or 'view' signatures, found {}", describe(other))))
-                }
-            };
-            self.advance();
-            let (fname, _) = self.ident("function name")?;
-            let params = self.params()?;
-            let ret = if self.eat(&Tok::Arrow) { Some(self.type_expr()?) } else { None };
-            let payable = self.eat(&Tok::Payable);
-            if self.check(&Tok::Colon) {
-                return Err(CompileError::new(self.pos(), "interface functions have no body; remove the ':'"));
-            }
-            self.end_stmt()?;
-            functions.push(InterfaceFn { kind, name: fname, params, ret, payable, pos: fpos });
-        }
-        if functions.is_empty() {
-            return Err(CompileError::new(pos, "an interface needs at least one function"));
-        }
-        Ok(Item::Interface { name, functions, pos })
-    }
-
-    fn role_item(&mut self) -> PResult<Item> {
-        let pos = self.advance().pos;
-        let (name, _) = self.ident("role name")?;
-        self.expect(&Tok::Newline, "end of line")?;
-        Ok(Item::Role { name, pos })
-    }
-
-    fn use_item(&mut self) -> PResult<Item> {
-        let pos = self.advance().pos;
-        let (mut path, _) = self.ident("module name, e.g. 'use std.token'")?;
-        while self.eat(&Tok::Dot) {
-            let (part, _) = self.ident("module name")?;
-            path = format!("{path}.{part}");
-        }
-        let alias = if self.word("as") {
-            self.advance();
-            Some(self.ident("module alias")?.0)
-        } else {
-            None
-        };
-        self.expect(&Tok::Newline, "end of line")?;
-        Ok(Item::Use { path, alias, pos })
+        Ok(Contract { name, pos, items })
     }
 
     fn type_expr(&mut self) -> PResult<TypeExpr> {
@@ -368,14 +166,7 @@ impl Parser {
                 self.expect(&Tok::RBracket, "']'")?;
                 Ok(TypeExpr::Map(Box::new(k), Box::new(v), pos))
             }
-            _ => {
-                let mut name = name;
-                if self.eat(&Tok::Dot) {
-                    let (inner, _) = self.ident("type name after '.'")?;
-                    name = format!("{name}.{inner}");
-                }
-                Ok(TypeExpr::Named(name, pos))
-            }
+            _ => Ok(TypeExpr::Named(name, pos)),
         }
     }
 
@@ -433,33 +224,15 @@ impl Parser {
             Tok::Init => FuncKind::Init,
             Tok::Action => FuncKind::Action,
             Tok::View => FuncKind::View,
-            Tok::Ident(_) => FuncKind::Upgrade,
             _ => FuncKind::Fn,
         };
-        let name = match kind {
-            FuncKind::Init => "init".to_string(),
-            FuncKind::Upgrade => "upgrade".to_string(),
-            _ => self.ident("function name")?.0,
-        };
+        let name = if kind == FuncKind::Init { "init".to_string() } else { self.ident("function name")?.0 };
         let params = self.params()?;
-        // Version 2 accepts `payable` before or after the return type.
-        let mut payable = self.eat(&Tok::Payable);
         let ret = if self.eat(&Tok::Arrow) { Some(self.type_expr()?) } else { None };
-        payable |= self.eat(&Tok::Payable);
-        let mut only = Vec::new();
-        if self.word("only") {
-            self.advance();
-            loop {
-                let (who, wpos) = self.ident("a role or an address state variable after 'only'")?;
-                only.push((who, wpos));
-                if !self.eat(&Tok::Comma) {
-                    break;
-                }
-            }
-        }
+        let payable = self.eat(&Tok::Payable);
         self.expect(&Tok::Colon, "':' at the end of the function header")?;
         let body = self.block()?;
-        Ok(FuncDecl { kind, name, params, ret, payable, only, body, pos })
+        Ok(FuncDecl { kind, name, params, ret, payable, body, pos })
     }
 
     fn block(&mut self) -> PResult<Vec<Stmt>> {
@@ -605,22 +378,6 @@ impl Parser {
                 self.end_stmt()?;
                 Stmt::Destroy(to, pos)
             }
-            Tok::Ident(w)
-                if (w == "grant" || w == "revoke")
-                    && matches!(self.peek_at(1), Tok::Ident(_))
-                    && is_word(self.peek_at(2), if w == "grant" { "to" } else { "from" }) =>
-            {
-                self.advance();
-                let (role, _) = self.ident("role name")?;
-                self.advance();
-                let who = self.expr()?;
-                self.end_stmt()?;
-                if w == "grant" {
-                    Stmt::Grant { role, who, pos }
-                } else {
-                    Stmt::Revoke { role, who, pos }
-                }
-            }
             _ => {
                 let target = self.expr()?;
                 let op = match self.peek() {
@@ -657,27 +414,6 @@ impl Parser {
         }
         self.expect(&Tok::RParen, "')'")?;
         Ok(args)
-    }
-
-    /// `(name: ...` — named arguments build a record.
-    fn named_args_ahead(&self) -> bool {
-        matches!(self.peek(), Tok::LParen) && matches!(self.peek_at(1), Tok::Ident(_)) && matches!(self.peek_at(2), Tok::Colon)
-    }
-
-    fn named_args(&mut self) -> PResult<Vec<(String, Expr, Pos)>> {
-        self.expect(&Tok::LParen, "'('")?;
-        let mut out = Vec::new();
-        loop {
-            let (name, pos) = self.ident("field name")?;
-            self.expect(&Tok::Colon, "':' after the field name")?;
-            let value = self.expr()?;
-            out.push((name, value, pos));
-            if !self.eat(&Tok::Comma) || self.check(&Tok::RParen) {
-                break;
-            }
-        }
-        self.expect(&Tok::RParen, "')'")?;
-        Ok(out)
     }
 
     fn expr(&mut self) -> PResult<Expr> {
@@ -825,23 +561,9 @@ impl Parser {
                 e = Expr::Index(Box::new(e), Box::new(idx), pos);
             } else if self.check(&Tok::Dot) {
                 let pos = self.advance().pos;
-                let (name, _) = self.ident("field or method name")?;
-                if self.check(&Tok::LParen) {
-                    if self.named_args_ahead() {
-                        let fields = self.named_args()?;
-                        e = Expr::Construct(Box::new(Expr::Field(Box::new(e), name, pos)), fields, pos);
-                    } else {
-                        let args = self.call_args()?;
-                        e = Expr::Method(Box::new(e), name, args, pos);
-                    }
-                } else {
-                    e = Expr::Field(Box::new(e), name, pos);
-                }
-            } else if self.word("with") && is_word(self.peek_at(1), "value") && matches!(e, Expr::Method(..)) {
-                let pos = self.advance().pos;
-                self.advance();
-                let v = self.add_expr()?;
-                return Ok(Expr::WithValue(Box::new(e), Box::new(v), pos));
+                let (name, _) = self.ident("method name")?;
+                let args = self.call_args()?;
+                e = Expr::Method(Box::new(e), name, args, pos);
             } else {
                 return Ok(e);
             }
@@ -873,10 +595,7 @@ impl Parser {
             }
             Tok::Ident(name) => {
                 self.advance();
-                if self.check(&Tok::LParen) && self.named_args_ahead() {
-                    let fields = self.named_args()?;
-                    Ok(Expr::Construct(Box::new(Expr::Name(name, pos)), fields, pos))
-                } else if self.check(&Tok::LParen) {
+                if self.check(&Tok::LParen) {
                     let args = self.call_args()?;
                     Ok(Expr::Call(name, args, pos))
                 } else {
@@ -941,9 +660,9 @@ fn double(x: int) -> int:
     else:
         return -x
 "#;
-        let c = parse_file(src).unwrap();
-        assert_eq!(c.units[0].name, "Bank");
-        assert_eq!(c.units[0].items.len(), 8);
+        let c = parse(src).unwrap();
+        assert_eq!(c.name, "Bank");
+        assert_eq!(c.items.len(), 8);
     }
 
     #[test]
@@ -959,20 +678,20 @@ fn double(x: int) -> int:
         ];
         for src in cases {
             let src2 = src.clone();
-            let result = std::thread::Builder::new().stack_size(1024 * 1024).spawn(move || parse_file(&src2).is_err()).unwrap().join();
+            let result = std::thread::Builder::new().stack_size(1024 * 1024).spawn(move || parse(&src2).is_err()).unwrap().join();
             assert_eq!(result.ok(), Some(true), "must fail cleanly: {}", &src[..60.min(src.len())]);
         }
-        assert!(parse_file(&body(format!("1{}", "+1".repeat(MAX_CHAIN)))).is_ok());
+        assert!(parse(&body(format!("1{}", "+1".repeat(MAX_CHAIN)))).is_ok());
     }
 
     #[test]
     fn errors_have_positions() {
-        let e = parse_file("contract A\naction f(:\n    pass\n").unwrap_err();
+        let e = parse("contract A\naction f(:\n    pass\n").unwrap_err();
         assert_eq!(e.pos.line, 2);
-        assert!(parse_file("contract A\naction f():\n").is_err());
-        assert!(parse_file("contract A\naction f():\n    let x = 1\n").unwrap_err().message.contains("type"));
+        assert!(parse("contract A\naction f():\n").is_err());
+        assert!(parse("contract A\naction f():\n    let x = 1\n").unwrap_err().message.contains("type"));
         let deep = format!("contract A\nview f() -> int:\n    return {}1{}\n", "(".repeat(100), ")".repeat(100));
-        assert!(parse_file(&deep).unwrap_err().message.contains("nesting"));
-        assert!(parse_file("contract A\nview f() -> bool:\n    return 1 < 2 < 3\n").is_err());
+        assert!(parse(&deep).unwrap_err().message.contains("nesting"));
+        assert!(parse("contract A\nview f() -> bool:\n    return 1 < 2 < 3\n").is_err());
     }
 }

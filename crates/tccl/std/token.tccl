@@ -1,0 +1,99 @@
+module token
+# Fungible token: balances, allowances and the usual actions.
+#
+#   contract CloudCoin
+#   use std.token
+#   role minter
+#
+#   init():
+#       token.setup("Cloud Coin", "CLD", 8)
+#       grant minter to caller
+#
+#   action mint(to: address, amount: int) only minter:
+#       token.mint(to, amount)
+#
+# Exported actions: transfer, approve, transfer_from.
+# Exported views: balance_of, allowance, total_supply_of, name, symbol, decimals.
+# Helpers for your contract: token.setup, token.mint, token.burn, token.move.
+
+state ready: bool
+state token_name: text
+state token_symbol: text
+state token_decimals: int
+state total_supply: int
+state balances: map[address, int]
+state allowances: map[bytes, int]
+
+event Transfer(from: address, to: address, amount: int)
+event Approval(owner: address, spender: address, amount: int)
+
+fn setup(new_name: text, new_symbol: text, new_decimals: int):
+    require not ready, "token already set up"
+    require len(new_name) >= 1 and len(new_name) <= 64, "token name must have 1 to 64 bytes"
+    require len(new_symbol) >= 1 and len(new_symbol) <= 12, "token symbol must have 1 to 12 bytes"
+    require new_decimals >= 0 and new_decimals <= 18, "decimals must be between 0 and 18"
+    ready = true
+    token_name = new_name
+    token_symbol = new_symbol
+    token_decimals = new_decimals
+
+fn mint(to: address, amount: int):
+    require ready, "token is not set up"
+    require amount > 0, "mint amount must be positive"
+    require to != zero_address(), "cannot mint to the zero address"
+    total_supply += amount
+    balances[to] += amount
+    emit Transfer(zero_address(), to, amount)
+
+fn burn(owner: address, amount: int):
+    require amount > 0, "burn amount must be positive"
+    require balances[owner] >= amount, "burn amount exceeds balance"
+    balances[owner] -= amount
+    total_supply -= amount
+    emit Transfer(owner, zero_address(), amount)
+
+fn move(from: address, to: address, amount: int):
+    require amount > 0, "amount must be positive"
+    require to != zero_address(), "cannot transfer to the zero address"
+    require balances[from] >= amount, "insufficient token balance"
+    balances[from] -= amount
+    balances[to] += amount
+    emit Transfer(from, to, amount)
+
+fn allowance_key(owner: address, spender: address) -> bytes:
+    return to_bytes(owner) + to_bytes(spender)
+
+action transfer(to: address, amount: int) -> bool:
+    move(caller, to, amount)
+    return true
+
+action approve(spender: address, amount: int) -> bool:
+    require amount >= 0, "allowance cannot be negative"
+    allowances[allowance_key(caller, spender)] = amount
+    emit Approval(caller, spender, amount)
+    return true
+
+action transfer_from(from: address, to: address, amount: int) -> bool:
+    let key: bytes = allowance_key(from, caller)
+    require allowances[key] >= amount, "allowance too small"
+    allowances[key] -= amount
+    move(from, to, amount)
+    return true
+
+view balance_of(who: address) -> int:
+    return balances[who]
+
+view allowance(owner: address, spender: address) -> int:
+    return allowances[allowance_key(owner, spender)]
+
+view total_supply_of() -> int:
+    return total_supply
+
+view name() -> text:
+    return token_name
+
+view symbol() -> text:
+    return token_symbol
+
+view decimals() -> int:
+    return token_decimals

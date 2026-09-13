@@ -5,12 +5,38 @@
 //! well-typed. This structure is Borsh-encoded and stored on-chain; nodes
 //! execute it directly. **The encoding is consensus-critical** — enum variants
 //! may only be appended.
+//!
+//! * **Version 1** programs are encoded exactly as on The Coin v0.2.0:
+//!   `version, name, states, events, functions`.
+//! * **Version 2** programs append the sections `records, enums, interfaces,
+//!   roles, access, modules, effects`. Version 2 only adds enum variants at the end,
+//!   so every version 1 construct keeps its encoding.
 
-use crate::ast::BinOp;
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::fmt;
 
-pub const LANGUAGE_VERSION: u16 = 1;
+/// Newest language version this crate compiles.
+pub const LANGUAGE_VERSION: u16 = 2;
+/// Oldest language version this crate still compiles and executes.
+pub const MIN_LANGUAGE_VERSION: u16 = 1;
+
+/// Binary operators (consensus-critical order: variants may only be appended).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
 pub enum Type {
@@ -23,11 +49,37 @@ pub enum Type {
     Map(Box<Type>, Box<Type>),
     /// No value (functions without a return type).
     Unit,
+    // ---- version 2 ----
+    /// A record declared by the program (index into [`Program::records`]); runtime value: `Value::List` of fields.
+    Record(u16),
+    /// An enum declared by the program (index into [`Program::enums`]); runtime value: `Value::Int` variant index.
+    Enum(u16),
+    /// A contract address used through an interface (index into [`Program::interfaces`]); runtime value: `Value::Address`.
+    Interface(u16),
 }
 
 impl Type {
     pub fn is_scalar(&self) -> bool {
         matches!(self, Type::Int | Type::Bool | Type::Text | Type::Bytes | Type::Address)
+    }
+
+    /// Types that can appear in an interface signature (the same on both sides of a call).
+    pub fn is_portable(&self) -> bool {
+        match self {
+            Type::Int | Type::Bool | Type::Text | Type::Bytes | Type::Address | Type::Unit => true,
+            Type::List(inner) => inner.is_portable(),
+            _ => false,
+        }
+    }
+
+    /// Whether the type (or anything inside it) is a version 2 type.
+    pub fn uses_v2(&self) -> bool {
+        match self {
+            Type::Record(_) | Type::Enum(_) | Type::Interface(_) => true,
+            Type::List(t) => t.uses_v2(),
+            Type::Map(k, v) => k.uses_v2() || v.uses_v2(),
+            _ => false,
+        }
     }
 
     /// Types usable as map keys.
@@ -90,6 +142,9 @@ impl fmt::Display for Type {
             Type::List(t) => write!(f, "list[{t}]"),
             Type::Map(k, v) => write!(f, "map[{k}, {v}]"),
             Type::Unit => f.write_str("nothing"),
+            Type::Record(i) => write!(f, "record#{i}"),
+            Type::Enum(i) => write!(f, "enum#{i}"),
+            Type::Interface(i) => write!(f, "interface#{i}"),
         }
     }
 }
@@ -147,15 +202,16 @@ fn read_value<R: std::io::Read>(reader: &mut R, depth: usize) -> std::io::Result
 }
 
 impl Value {
+    /// Default value of a version 1 type (records need [`Program::default_value`]).
     pub fn default_for(t: &Type) -> Value {
         match t {
-            Type::Int => Value::Int(0),
+            Type::Int | Type::Enum(_) => Value::Int(0),
             Type::Bool => Value::Bool(false),
             Type::Text => Value::Text(String::new()),
             Type::Bytes => Value::Bytes(Vec::new()),
-            Type::Address => Value::Address([0u8; 20]),
+            Type::Address | Type::Interface(_) => Value::Address([0u8; 20]),
             Type::List(_) => Value::List(Vec::new()),
-            Type::Map(_, _) | Type::Unit => Value::Unit,
+            Type::Map(_, _) | Type::Unit | Type::Record(_) => Value::Unit,
         }
     }
 
@@ -168,6 +224,7 @@ impl Value {
             | (Value::Address(_), Type::Address)
             | (Value::Unit, Type::Unit) => true,
             (Value::List(items), Type::List(inner)) => items.iter().all(|v| v.has_type(inner)),
+            (Value::Address(_), Type::Interface(_)) => true,
             _ => false,
         }
     }
@@ -197,6 +254,8 @@ pub enum FnKind {
     Action,
     View,
     Internal,
+    /// Version 2: runs once inside the upgrade transaction that installs this code.
+    Upgrade,
 }
 
 #[derive(Clone, Debug, PartialEq, BorshSerialize, BorshDeserialize)]
@@ -228,12 +287,146 @@ pub struct Function {
 }
 
 #[derive(Clone, Debug, PartialEq, BorshSerialize, BorshDeserialize)]
+pub struct RecordDef {
+    pub name: String,
+    pub fields: Vec<(String, Type)>,
+}
+
+#[derive(Clone, Debug, PartialEq, BorshSerialize, BorshDeserialize, serde::Serialize)]
+pub struct EnumDef {
+    pub name: String,
+    pub variants: Vec<String>,
+    /// `Some(next)` when transitions are enforced: `next[i]` lists the variants allowed after variant `i`.
+    pub transitions: Option<Vec<Vec<u16>>>,
+}
+
+#[derive(Clone, Debug, PartialEq, BorshSerialize, BorshDeserialize)]
+pub struct InterfaceFnDef {
+    pub name: String,
+    pub kind: FnKind,
+    pub payable: bool,
+    pub params: Vec<(String, Type)>,
+    pub ret: Type,
+}
+
+#[derive(Clone, Debug, PartialEq, BorshSerialize, BorshDeserialize)]
+pub struct InterfaceDef {
+    pub name: String,
+    pub functions: Vec<InterfaceFnDef>,
+}
+
+/// A role: a set of addresses stored in the map state variable `state`.
+#[derive(Clone, Debug, PartialEq, BorshSerialize, BorshDeserialize, serde::Serialize)]
+pub struct RoleDef {
+    pub name: String,
+    pub state: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, BorshSerialize, BorshDeserialize, serde::Serialize)]
+pub enum AccessRule {
+    /// Members of a role.
+    Role(u16),
+    /// The address stored in an address state variable.
+    Address(u16),
+}
+
+/// Who may call an entry point (any rule matches). Enforced by a check compiled
+/// at the start of the function body; recorded here for wallets and explorers.
+#[derive(Clone, Debug, PartialEq, BorshSerialize, BorshDeserialize, serde::Serialize)]
+pub struct FunctionAccess {
+    pub function: u16,
+    pub rules: Vec<AccessRule>,
+}
+
+/// A module compiled into the program. Modules are source code reused at compile
+/// time; they have no address, balance or separate deployment.
+#[derive(Clone, Debug, PartialEq, BorshSerialize, BorshDeserialize, serde::Serialize)]
+pub struct ModuleRef {
+    pub name: String,
+    /// BLAKE3 of the module source text.
+    pub source_hash: [u8; 32],
+}
+
+/// What the program can do, inferred by the compiler (shown to users before they call).
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize)]
+pub struct Effects {
+    pub changes_state: bool,
+    pub receives_tcn: bool,
+    pub sends_tcn: bool,
+    pub emits_events: bool,
+    pub calls_contracts: bool,
+    pub can_destroy: bool,
+    pub has_upgrade_hook: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Program {
     pub version: u16,
     pub name: String,
     pub states: Vec<StateVar>,
     pub events: Vec<EventDef>,
     pub functions: Vec<Function>,
+    // ---- version 2 sections (always empty for version 1) ----
+    pub records: Vec<RecordDef>,
+    pub enums: Vec<EnumDef>,
+    pub interfaces: Vec<InterfaceDef>,
+    pub roles: Vec<RoleDef>,
+    pub access: Vec<FunctionAccess>,
+    pub modules: Vec<ModuleRef>,
+    pub effects: Effects,
+}
+
+impl BorshSerialize for Program {
+    fn serialize<W: std::io::Write>(&self, w: &mut W) -> std::io::Result<()> {
+        self.version.serialize(w)?;
+        self.name.serialize(w)?;
+        self.states.serialize(w)?;
+        self.events.serialize(w)?;
+        self.functions.serialize(w)?;
+        if self.version >= 2 {
+            self.records.serialize(w)?;
+            self.enums.serialize(w)?;
+            self.interfaces.serialize(w)?;
+            self.roles.serialize(w)?;
+            self.access.serialize(w)?;
+            self.modules.serialize(w)?;
+            self.effects.serialize(w)?;
+        }
+        Ok(())
+    }
+}
+
+impl BorshDeserialize for Program {
+    fn deserialize_reader<R: std::io::Read>(r: &mut R) -> std::io::Result<Self> {
+        let version = u16::deserialize_reader(r)?;
+        if !(MIN_LANGUAGE_VERSION..=LANGUAGE_VERSION).contains(&version) {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("unsupported language version {version}")));
+        }
+        let mut p = Program {
+            version,
+            name: String::deserialize_reader(r)?,
+            states: Vec::deserialize_reader(r)?,
+            events: Vec::deserialize_reader(r)?,
+            functions: Vec::deserialize_reader(r)?,
+            records: Vec::new(),
+            enums: Vec::new(),
+            interfaces: Vec::new(),
+            roles: Vec::new(),
+            access: Vec::new(),
+            modules: Vec::new(),
+            effects: Effects::default(),
+        };
+        if version >= 2 {
+            p.records = Vec::deserialize_reader(r)?;
+            p.enums = Vec::deserialize_reader(r)?;
+            p.interfaces = Vec::deserialize_reader(r)?;
+            p.roles = Vec::deserialize_reader(r)?;
+            p.access = Vec::deserialize_reader(r)?;
+            p.modules = Vec::deserialize_reader(r)?;
+            p.effects = Effects::deserialize_reader(r)?;
+        }
+        Ok(p)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -243,6 +436,9 @@ pub enum Ctx {
     Balance,
     Height,
     SelfAddress,
+    // ---- version 2 ----
+    /// The account that signed the transaction (never a contract).
+    Origin,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -264,6 +460,21 @@ pub enum Builtin {
     AddressOfKey,
     ZeroAddress,
     IntOfBytes,
+    // ---- version 2 ----
+    /// `mul_div(a, b, c)`: ⌊a × b ÷ c⌋ computed without intermediate overflow.
+    MulDiv,
+    /// `isqrt(x)`: ⌊√x⌋ for x ≥ 0.
+    Isqrt,
+    /// `pow(base, exp)`: checked integer power, exp ≥ 0.
+    Pow,
+    /// `code_hash(addr)`: BLAKE3 of the contract's compiled code, empty bytes if not a contract.
+    CodeHash,
+    /// `is_contract(addr)`
+    IsContract,
+    /// `is_final(addr)`: true if a contract has no upgrade authority (can never change).
+    IsFinal,
+    /// `to_text(enum value)`: variant name. args: [enum id as Const, value]
+    TextOfEnum,
 }
 
 #[derive(Clone, Debug, PartialEq, BorshSerialize, BorshDeserialize)]
@@ -310,6 +521,14 @@ pub enum Expr {
     Call { func: u16, args: Vec<Expr> },
     Builtin { f: Builtin, args: Vec<Expr> },
     Ctx(Ctx),
+    // ---- version 2 ----
+    /// A copy of the list/record `base` with item `index` replaced by `value`.
+    Replace { base: Box<Expr>, index: u16, value: Box<Expr> },
+    /// Evaluates `to`; fails unless every enum-with-transitions inside `ty` moves from
+    /// the value of `from` to an allowed variant. Evaluates to `to`.
+    Transition { ty: Type, from: Box<Expr>, to: Box<Expr> },
+    /// Calls `function` of the contract at `target` through an interface.
+    CallContract { target: Box<Expr>, function: String, kind: FnKind, params: Vec<Type>, ret: Type, args: Vec<Expr>, value: Option<Box<Expr>> },
 }
 
 /// Public interface of a function (for wallets, explorers and the API).
@@ -323,12 +542,75 @@ pub struct AbiFunction {
 }
 
 impl Program {
+    /// An empty program of the given language version.
+    pub fn empty(version: u16, name: &str) -> Program {
+        Program {
+            version,
+            name: name.to_string(),
+            states: Vec::new(),
+            events: Vec::new(),
+            functions: Vec::new(),
+            records: Vec::new(),
+            enums: Vec::new(),
+            interfaces: Vec::new(),
+            roles: Vec::new(),
+            access: Vec::new(),
+            modules: Vec::new(),
+            effects: Effects::default(),
+        }
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         borsh::to_vec(self).expect("program serializes")
     }
 
     pub fn from_bytes(b: &[u8]) -> Result<Program, std::io::Error> {
         Program::try_from_slice(b)
+    }
+
+    /// BLAKE3 of the encoded program (what `code_hash` returns).
+    pub fn code_hash(&self) -> [u8; 32] {
+        *blake3::hash(&self.to_bytes()).as_bytes()
+    }
+
+    /// Default value of any type of this program (records hold their field defaults).
+    pub fn default_value(&self, t: &Type) -> Value {
+        self.default_value_depth(t, 0)
+    }
+
+    fn default_value_depth(&self, t: &Type, depth: usize) -> Value {
+        match t {
+            Type::Record(i) if depth < MAX_VALUE_DEPTH => match self.records.get(*i as usize) {
+                Some(r) => Value::List(r.fields.iter().map(|(_, ft)| self.default_value_depth(ft, depth + 1)).collect()),
+                None => Value::Unit,
+            },
+            other => Value::default_for(other),
+        }
+    }
+
+    /// Type check of a value against a type of this program.
+    pub fn value_has_type(&self, v: &Value, t: &Type) -> bool {
+        match (v, t) {
+            (Value::Int(i), Type::Enum(e)) => self.enums.get(*e as usize).is_some_and(|d| *i >= 0 && (*i as usize) < d.variants.len()),
+            (Value::List(items), Type::Record(r)) => match self.records.get(*r as usize) {
+                Some(def) => items.len() == def.fields.len() && items.iter().zip(&def.fields).all(|(x, (_, ft))| self.value_has_type(x, ft)),
+                None => false,
+            },
+            (Value::List(items), Type::List(inner)) => items.iter().all(|x| self.value_has_type(x, inner)),
+            _ => v.has_type(t),
+        }
+    }
+
+    /// Source-like name of a type (`Order`, `list[Phase]`, `Token`).
+    pub fn type_name(&self, t: &Type) -> String {
+        match t {
+            Type::Record(i) => self.records.get(*i as usize).map_or_else(|| t.to_string(), |r| r.name.clone()),
+            Type::Enum(i) => self.enums.get(*i as usize).map_or_else(|| t.to_string(), |e| e.name.clone()),
+            Type::Interface(i) => self.interfaces.get(*i as usize).map_or_else(|| t.to_string(), |x| x.name.clone()),
+            Type::List(inner) => format!("list[{}]", self.type_name(inner)),
+            Type::Map(k, v) => format!("map[{}, {}]", self.type_name(k), self.type_name(v)),
+            other => other.to_string(),
+        }
     }
 
     pub fn find(&self, name: &str) -> Option<(u16, &Function)> {
@@ -343,8 +625,8 @@ impl Program {
                 name: f.name.clone(),
                 kind: f.kind,
                 payable: f.payable,
-                params: f.params.iter().map(|(n, t)| (n.clone(), t.to_string())).collect(),
-                returns: f.ret.to_string(),
+                params: f.params.iter().map(|(n, t)| (n.clone(), self.type_name(t))).collect(),
+                returns: self.type_name(&f.ret),
             })
             .collect()
     }

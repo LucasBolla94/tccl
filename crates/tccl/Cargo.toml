@@ -3,15 +3,14 @@ name = "tccl"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "TCCL — The Coin Cloud Language: compiler and deterministic virtual machine for The Coin smart contracts"
+description = "TCCL — The Coin Cloud Language: compiler, deterministic virtual machine and simulator for The Coin smart contracts"
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
 
 [lib]
 name = "tccl"
 path = "src/lib.rs"
-
-[[bin]]
-name = "tccl"
-path = "src/main.rs"
 
 [dependencies]
 borsh.workspace = true

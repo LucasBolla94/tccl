@@ -1,0 +1,106 @@
+module payments
+# Conditional payments held by the contract until a condition is met:
+#   * the payer (or the arbiter) approves            -> release_payment
+#   * a block height is reached (payee claims)       -> claim_payment
+#   * someone reveals the secret behind a hash lock  -> reveal_payment
+#   * a deadline passes (payer takes the money back) -> refund_payment
+#
+#   contract Deals
+#   use std.payments
+#
+# Exported actions: create_payment (payable), release_payment, claim_payment,
+# reveal_payment, refund_payment. Exported views: payment, payment_status, locked_total.
+# Status transitions are enforced: Pending -> Released or Refunded, never back.
+
+enum Status:
+    Pending -> Released, Refunded
+    Released
+    Refunded
+
+record Payment:
+    payer: address
+    payee: address
+    arbiter: address
+    amount: int
+    release_after: int
+    refund_after: int
+    hashlock: bytes
+    status: Status
+
+state ledger: map[int, Payment]
+state count: int
+state locked: int
+
+event PaymentCreated(id: int, payer: address, payee: address, amount: int)
+event PaymentReleased(id: int, payee: address, amount: int, reason: text)
+event PaymentRefunded(id: int, payer: address, amount: int, reason: text)
+
+fn create(payer: address, payee: address, arbiter: address, amount: int, release_after: int, refund_after: int, hashlock: bytes) -> int:
+    require amount > 0, "payment amount must be positive"
+    require payee != zero_address(), "payee cannot be the zero address"
+    require payee != payer, "payer and payee must differ"
+    require release_after >= 0 and refund_after >= 0, "heights cannot be negative"
+    require len(hashlock) == 0 or len(hashlock) == 32, "hashlock must be empty or a 32-byte sha256"
+    require refund_after == 0 or release_after == 0 or refund_after > release_after, "refund must come after release"
+    count += 1
+    ledger[count] = Payment(payer: payer, payee: payee, arbiter: arbiter, amount: amount, release_after: release_after, refund_after: refund_after, hashlock: hashlock, status: Status.Pending)
+    locked += amount
+    emit PaymentCreated(count, payer, payee, amount)
+    return count
+
+fn pending(id: int) -> Payment:
+    require ledger.has(id), "unknown payment"
+    let p: Payment = ledger[id]
+    require p.status == Status.Pending, "payment is no longer pending"
+    return p
+
+fn pay_out(id: int, reason: text):
+    let p: Payment = pending(id)
+    ledger[id].status = Status.Released
+    locked -= p.amount
+    send(p.payee, p.amount)
+    emit PaymentReleased(id, p.payee, p.amount, reason)
+
+fn pay_back(id: int, reason: text):
+    let p: Payment = pending(id)
+    ledger[id].status = Status.Refunded
+    locked -= p.amount
+    send(p.payer, p.amount)
+    emit PaymentRefunded(id, p.payer, p.amount, reason)
+
+action create_payment(payee: address, arbiter: address, release_after: int, refund_after: int, hashlock: bytes) payable -> int:
+    return create(caller, payee, arbiter, value, release_after, refund_after, hashlock)
+
+action release_payment(id: int):
+    let p: Payment = pending(id)
+    require caller == p.payer or (p.arbiter != zero_address() and caller == p.arbiter), "only the payer or the arbiter can release"
+    pay_out(id, "approved")
+
+action claim_payment(id: int):
+    let p: Payment = pending(id)
+    require caller == p.payee, "only the payee can claim"
+    require p.release_after > 0 and height >= p.release_after, "the release height has not been reached"
+    pay_out(id, "time")
+
+action reveal_payment(id: int, secret: bytes):
+    let p: Payment = pending(id)
+    require len(p.hashlock) == 32, "this payment has no hash lock"
+    require sha256(secret) == p.hashlock, "wrong secret"
+    pay_out(id, "secret")
+
+action refund_payment(id: int):
+    let p: Payment = pending(id)
+    let expired: bool = p.refund_after > 0 and height >= p.refund_after and caller == p.payer
+    require caller == p.payee or (p.arbiter != zero_address() and caller == p.arbiter) or expired, "refund not allowed yet"
+    pay_back(id, "refunded")
+
+view payment(id: int) -> Payment:
+    require ledger.has(id), "unknown payment"
+    return ledger[id]
+
+view payment_status(id: int) -> text:
+    require ledger.has(id), "unknown payment"
+    return to_text(ledger[id].status)
+
+view locked_total() -> int:
+    return locked

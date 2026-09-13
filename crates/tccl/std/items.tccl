@@ -1,0 +1,89 @@
+module items
+# Unique items (collectibles, game objects, tickets, certificates).
+#
+#   contract Tickets
+#   use std.items
+#   state organizer: address
+#
+#   init():
+#       organizer = caller
+#
+#   action issue(to: address, seat: text) -> int only organizer:
+#       return items.create(to, "ticket", seat)
+#
+# Exported actions: transfer_item, approve_item, take_item.
+# Exported views: item, owner_of, items_owned_by, item_count.
+# Helpers for your contract: items.create, items.move_item, items.burn_item.
+
+record Item:
+    owner: address
+    kind: text
+    metadata: text
+    created: int
+
+state catalog: map[int, Item]
+state count: int
+state approvals: map[int, address]
+state owned: map[address, int]
+
+event ItemCreated(id: int, owner: address, kind: text)
+event ItemTransferred(id: int, from: address, to: address)
+event ItemApproved(id: int, owner: address, spender: address)
+event ItemBurned(id: int, owner: address)
+
+fn create(to: address, kind: text, metadata: text) -> int:
+    require to != zero_address(), "cannot create an item for the zero address"
+    require len(kind) >= 1 and len(kind) <= 32, "item kind must have 1 to 32 bytes"
+    require len(metadata) <= 1024, "item metadata can have at most 1024 bytes"
+    count += 1
+    catalog[count] = Item(owner: to, kind: kind, metadata: metadata, created: height)
+    owned[to] += 1
+    emit ItemCreated(count, to, kind)
+    return count
+
+fn move_item(id: int, to: address):
+    require catalog.has(id), "unknown item"
+    require to != zero_address(), "cannot transfer to the zero address"
+    let from: address = catalog[id].owner
+    catalog[id].owner = to
+    approvals.remove(id)
+    owned[from] -= 1
+    owned[to] += 1
+    emit ItemTransferred(id, from, to)
+
+fn burn_item(id: int):
+    require catalog.has(id), "unknown item"
+    let owner: address = catalog[id].owner
+    catalog.remove(id)
+    approvals.remove(id)
+    owned[owner] -= 1
+    emit ItemBurned(id, owner)
+
+action transfer_item(id: int, to: address):
+    require catalog.has(id), "unknown item"
+    require catalog[id].owner == caller, "only the owner can transfer this item"
+    move_item(id, to)
+
+action approve_item(id: int, spender: address):
+    require catalog.has(id), "unknown item"
+    require catalog[id].owner == caller, "only the owner can approve"
+    approvals[id] = spender
+    emit ItemApproved(id, caller, spender)
+
+action take_item(id: int, to: address):
+    require catalog.has(id), "unknown item"
+    require approvals[id] == caller, "not approved for this item"
+    move_item(id, to)
+
+view item(id: int) -> Item:
+    require catalog.has(id), "unknown item"
+    return catalog[id]
+
+view owner_of(id: int) -> address:
+    return catalog[id].owner
+
+view items_owned_by(who: address) -> int:
+    return owned[who]
+
+view item_count() -> int:
+    return count

@@ -1,6 +1,6 @@
 //! Converting between text/JSON and TCCL values (wallets, CLI, API).
 
-use crate::program::{Type, Value};
+use crate::program::{Program, Type, Value};
 use bech32::primitives::decode::CheckedHrpstring;
 use bech32::{Bech32m, Hrp};
 
@@ -39,7 +39,66 @@ pub fn parse_arg(s: &str, t: &Type) -> Result<Value, String> {
             }
             Ok(Value::List(items))
         }
-        Type::Map(_, _) | Type::Unit => Err(format!("arguments of type {t} are not supported")),
+        Type::Interface(_) => parse_address(s).map(Value::Address),
+        Type::Map(_, _) | Type::Unit | Type::Record(_) | Type::Enum(_) => Err(format!("arguments of type {t} are not supported")),
+    }
+}
+
+/// Parses an argument of any type of `program`: enums by variant name (`Open` or
+/// `Phase.Open`) or index, records as `{field: value, ...}` or `[value, ...]`.
+pub fn parse_arg_in(program: &Program, s: &str, t: &Type) -> Result<Value, String> {
+    let s = s.trim();
+    match t {
+        Type::Enum(e) => {
+            let def = program.enums.get(*e as usize).ok_or("unknown enum")?;
+            let name = s.rsplit('.').next().unwrap_or(s);
+            if let Some(i) = def.variants.iter().position(|v| v == name) {
+                return Ok(Value::Int(i as i128));
+            }
+            match s.parse::<usize>() {
+                Ok(i) if i < def.variants.len() => Ok(Value::Int(i as i128)),
+                _ => Err(format!("expected one of {} for {}, got '{s}'", def.variants.join(", "), def.name)),
+            }
+        }
+        Type::Record(r) => {
+            let def = program.records.get(*r as usize).ok_or("unknown record")?;
+            let named = s.starts_with('{');
+            let body = s
+                .strip_prefix(if named { '{' } else { '[' })
+                .and_then(|x| x.strip_suffix(if named { '}' } else { ']' }))
+                .ok_or_else(|| format!("record {} must look like {{field: value, ...}}", def.name))?;
+            let parts: Vec<String> = split_top_level(body).into_iter().filter(|p| !p.trim().is_empty()).collect();
+            if parts.len() != def.fields.len() {
+                return Err(format!("record {} has {} fields, {} given", def.name, def.fields.len(), parts.len()));
+            }
+            let mut out: Vec<Option<Value>> = vec![None; def.fields.len()];
+            for (i, part) in parts.iter().enumerate() {
+                let (idx, raw) = if named {
+                    let (k, v) = part.split_once(':').ok_or_else(|| format!("expected 'field: value', got '{part}'"))?;
+                    let k = k.trim();
+                    (def.fields.iter().position(|(n, _)| n == k).ok_or_else(|| format!("record {} has no field '{k}'", def.name))?, v)
+                } else {
+                    (i, part.as_str())
+                };
+                out[idx] = Some(parse_arg_in(program, raw, &def.fields[idx].1).map_err(|e| format!("field '{}': {e}", def.fields[idx].0))?);
+            }
+            if out.iter().any(Option::is_none) {
+                return Err(format!("record {} needs every field", def.name));
+            }
+            Ok(Value::List(out.into_iter().map(|v| v.expect("present")).collect()))
+        }
+        Type::List(inner) => {
+            let body = s.strip_prefix('[').and_then(|x| x.strip_suffix(']')).ok_or_else(|| format!("list must look like [a, b], got '{s}'"))?;
+            let mut items = Vec::new();
+            for part in split_top_level(body) {
+                if part.trim().is_empty() {
+                    continue;
+                }
+                items.push(parse_arg_in(program, &part, inner)?);
+            }
+            Ok(Value::List(items))
+        }
+        other => parse_arg(s, other),
     }
 }
 
@@ -86,11 +145,11 @@ fn split_top_level(s: &str) -> Vec<String> {
                 in_quotes = !in_quotes;
                 cur.push(ch);
             }
-            '[' if !in_quotes => {
+            '[' | '{' if !in_quotes => {
                 depth += 1;
                 cur.push(ch);
             }
-            ']' if !in_quotes => {
+            ']' | '}' if !in_quotes => {
                 depth -= 1;
                 cur.push(ch);
             }
@@ -112,6 +171,47 @@ pub fn to_json(v: &Value, hrp: &str) -> serde_json::Value {
         Value::Address(a) => serde_json::Value::String(format_address(a, hrp)),
         Value::List(items) => serde_json::Value::Array(items.iter().map(|x| to_json(x, hrp)).collect()),
         Value::Unit => serde_json::Value::Null,
+    }
+}
+
+/// Human-readable rendering using the type information of `program`
+/// (enum variant names, record field names).
+pub fn display_typed(program: &Program, v: &Value, t: &Type, hrp: &str) -> String {
+    match (t, v) {
+        (Type::Enum(e), Value::Int(i)) => match program.enums.get(*e as usize).and_then(|d| d.variants.get(*i as usize)) {
+            Some(name) => name.clone(),
+            None => i.to_string(),
+        },
+        (Type::Record(r), Value::List(items)) => match program.records.get(*r as usize) {
+            Some(def) if def.fields.len() == items.len() => format!(
+                "{}({})",
+                def.name,
+                def.fields.iter().zip(items).map(|((n, ft), x)| format!("{n}: {}", display_typed(program, x, ft, hrp))).collect::<Vec<_>>().join(", ")
+            ),
+            _ => display(v, hrp),
+        },
+        (Type::List(inner), Value::List(items)) => {
+            format!("[{}]", items.iter().map(|x| display_typed(program, x, inner, hrp)).collect::<Vec<_>>().join(", "))
+        }
+        _ => display(v, hrp),
+    }
+}
+
+/// JSON rendering with type information (records as objects, enums as names).
+pub fn to_json_typed(program: &Program, v: &Value, t: &Type, hrp: &str) -> serde_json::Value {
+    match (t, v) {
+        (Type::Enum(e), Value::Int(i)) => match program.enums.get(*e as usize).and_then(|d| d.variants.get(*i as usize)) {
+            Some(name) => serde_json::Value::String(name.clone()),
+            None => serde_json::Value::String(i.to_string()),
+        },
+        (Type::Record(r), Value::List(items)) => match program.records.get(*r as usize) {
+            Some(def) if def.fields.len() == items.len() => serde_json::Value::Object(
+                def.fields.iter().zip(items).map(|((n, ft), x)| (n.clone(), to_json_typed(program, x, ft, hrp))).collect(),
+            ),
+            _ => to_json(v, hrp),
+        },
+        (Type::List(inner), Value::List(items)) => serde_json::Value::Array(items.iter().map(|x| to_json_typed(program, x, inner, hrp)).collect()),
+        _ => to_json(v, hrp),
     }
 }
 

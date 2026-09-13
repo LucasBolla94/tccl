@@ -507,6 +507,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "tccl"
+version = "0.2.0"
+source = "git+https://github.com/LucasBolla94/thecoin?rev=8f620ea#8f620ea315b16b2e5e54613b13540753a593f5dc"
+dependencies = [
+ "bech32",
+ "blake3",
+ "borsh",
+ "curve25519-dalek",
+ "ed25519-dalek",
+ "hex",
+ "rand",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "tccl-compat"
+version = "0.2.0"
+dependencies = [
+ "blake3",
+ "borsh",
+ "hex",
+ "tccl 0.2.0",
+ "tccl 0.2.0 (git+https://github.com/LucasBolla94/thecoin?rev=8f620ea)",
+]
+
+[[package]]
 name = "thiserror"
 version = "2.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
