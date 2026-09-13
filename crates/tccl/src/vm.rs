@@ -62,6 +62,12 @@ pub mod fuel {
     pub const LOAD_PER_BYTES: u64 = 100;
     /// Version 2: `mul_div`, `isqrt`, `pow`.
     pub const MATH: u64 = 30;
+    /// Version 2: per heap allocation when a value is copied (text, bytes and list
+    /// nodes). Version 1 charges only per 32 bytes, which under-prices copying lists
+    /// of many small texts or lists by ~50× (see implant-the-coin-language.md).
+    pub const CLONE_NODE: u64 = 4;
+    /// Version 2: per heap allocation when a stored value is decoded.
+    pub const DECODE_NODE: u64 = 6;
 }
 
 /// Facts about a contract that other contracts may inspect (version 2).
@@ -298,6 +304,15 @@ impl<'a, H: Host> Vm<'a, H> {
 
     fn v2(&self) -> bool {
         self.program.version >= 2
+    }
+
+    /// Fuel to copy a value: per 32 bytes, plus per heap allocation in version 2.
+    fn charge_copy(&mut self, v: &Value) -> Result<(), VmError> {
+        let mut cost = v.size() as u64 / 32 * fuel::PER_32_BYTES;
+        if self.v2() {
+            cost += heap_nodes(v) * fuel::CLONE_NODE;
+        }
+        self.charge(cost)
     }
 
     /// Version 2 memory accounting: `delta` bytes more (or fewer) held by locals.
@@ -576,6 +591,15 @@ impl<'a, H: Host> Vm<'a, H> {
         borsh::from_slice::<Value>(bytes).map_err(|e| VmError::Host(format!("corrupt storage value: {e}")))
     }
 
+    /// Decodes a stored value; version 2 also pays for the allocations of large values.
+    fn load_value(&mut self, bytes: &[u8]) -> Result<Value, VmError> {
+        let v = Self::decode_value(bytes)?;
+        if self.v2() {
+            self.charge(bytes.len() as u64 / 32 * fuel::PER_32_BYTES + heap_nodes(&v) * fuel::DECODE_NODE)?;
+        }
+        Ok(v)
+    }
+
     fn write_scalar(&mut self, var: u16, ty: &Type, v: Value) -> Result<(), VmError> {
         if v == self.program.default_value(ty) {
             self.write(&scalar_key(var), None)
@@ -593,7 +617,7 @@ impl<'a, H: Host> Vm<'a, H> {
 
     fn list_get(&mut self, var: u16, index: u64) -> Result<Value, VmError> {
         match self.read(&list_item_key(var, index))? {
-            Some(b) => Self::decode_value(&b),
+            Some(b) => self.load_value(&b),
             None => Err(VmError::Host("missing list item".into())),
         }
     }
@@ -634,19 +658,36 @@ impl<'a, H: Host> Vm<'a, H> {
         self.charge(fuel::EXPR)?;
         Ok(match e {
             Expr::Const(v) => {
-                self.charge(v.size() as u64 / 32 * fuel::PER_32_BYTES)?;
+                self.charge_copy(v)?;
                 v.clone()
             }
             Expr::Local(slot) => {
-                let v = locals[*slot as usize].clone();
-                self.charge(v.size() as u64 / 32 * fuel::PER_32_BYTES)?;
-                v
+                self.charge_copy(&locals[*slot as usize])?;
+                locals[*slot as usize].clone()
+            }
+            // Version 2: read an item of a local list/record without copying the whole value.
+            Expr::Index { base, index } if self.v2() && matches!(**base, Expr::Local(_)) => {
+                let Expr::Local(slot) = **base else { unreachable!() };
+                self.charge(fuel::EXPR)?;
+                let i = self.eval_int(index, locals)?;
+                match &locals[slot as usize] {
+                    Value::List(items) => {
+                        let idx = check_index(i, items.len() as u64)? as usize;
+                        self.charge_copy(&items[idx])?;
+                        items[idx].clone()
+                    }
+                    Value::Bytes(bytes) => {
+                        let idx = check_index(i, bytes.len() as u64)? as usize;
+                        Value::Int(bytes[idx] as i128)
+                    }
+                    _ => return Err(VmError::Type("cannot index".into())),
+                }
             }
             Expr::State(var) => {
                 let program = self.program;
                 let ty = &program.states[*var as usize].ty;
                 match self.read(&scalar_key(*var))? {
-                    Some(b) => Self::decode_value(&b)?,
+                    Some(b) => self.load_value(&b)?,
                     None => program.default_value(ty),
                 }
             }
@@ -657,7 +698,7 @@ impl<'a, H: Host> Vm<'a, H> {
                 };
                 let default = self.program.default_value(vt);
                 match self.read(&map_key(*var, &k))? {
-                    Some(b) => Self::decode_value(&b)?,
+                    Some(b) => self.load_value(&b)?,
                     None => default,
                 }
             }
@@ -891,6 +932,16 @@ impl<'a, H: Host> Vm<'a, H> {
 
     fn builtin(&mut self, f: Builtin, args: &[Expr], locals: &[Value]) -> Result<Value, VmError> {
         Ok(match f {
+            Builtin::Len if self.v2() && matches!(args[0], Expr::Local(_)) => {
+                let Expr::Local(slot) = args[0] else { unreachable!() };
+                self.charge(fuel::EXPR)?;
+                match &locals[slot as usize] {
+                    Value::List(l) => Value::Int(l.len() as i128),
+                    Value::Text(t) => Value::Int(t.len() as i128),
+                    Value::Bytes(b) => Value::Int(b.len() as i128),
+                    _ => return Err(VmError::Type("len".into())),
+                }
+            }
             Builtin::Len => match self.eval(&args[0], locals)? {
                 Value::List(l) => Value::Int(l.len() as i128),
                 Value::Text(t) => Value::Int(t.len() as i128),
@@ -1038,6 +1089,16 @@ fn verify_ed25519(pk: &[u8], msg: &[u8], sig: &[u8]) -> bool {
         return false;
     }
     vk.verify_strict(msg, &ed25519_dalek::Signature::from_bytes(&sig)).is_ok()
+}
+
+/// Heap allocations needed to copy a value.
+fn heap_nodes(v: &Value) -> u64 {
+    match v {
+        Value::Text(t) => u64::from(!t.is_empty()),
+        Value::Bytes(b) => u64::from(!b.is_empty()),
+        Value::List(items) => u64::from(!items.is_empty()) + items.iter().map(heap_nodes).sum::<u64>(),
+        _ => 0,
+    }
 }
 
 fn check_index(i: i128, len: u64) -> Result<u64, VmError> {

@@ -525,6 +525,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tccl-cli"
+version = "0.2.0"
+dependencies = [
+ "borsh",
+ "hex",
+ "rand",
+ "serde_json",
+ "tccl 0.2.0",
+]
+
+[[package]]
 name = "tccl-compat"
 version = "0.2.0"
 dependencies = [

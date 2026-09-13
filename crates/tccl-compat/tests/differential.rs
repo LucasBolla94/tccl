@@ -4,7 +4,9 @@
 //! * The frozen version 1 compiler must produce **byte-identical programs** and
 //!   **identical errors** (message and position) for every input.
 //! * Version 1 programs must run with identical results, fuel, storage and events.
-//! * Version 1 sources compiled as version 2 must run with identical results and fuel.
+//! * Version 1 sources compiled as version 2 must run with identical results, storage,
+//!   events and payments. Their fuel may differ: version 2 prices copies per heap
+//!   allocation and avoids copying whole local lists for `xs[i]` and `len(xs)`.
 
 use std::collections::BTreeMap;
 
@@ -199,7 +201,7 @@ fn version_one_execution_is_identical() {
             }
             let a = tccl_v1::vm::execute(&reference, tccl_v1::vm::Mode::Deploy, "init", init_args.iter().map(to_ref).collect(), &ctx_ref(caller, value, height), &mut h_ref, fuel);
             let b = tccl::vm::execute(&ours_v1, tccl::vm::Mode::Deploy, "init", init_args.clone(), &ctx_new(caller, value, height), &mut h_v1, fuel);
-            let c = tccl::vm::execute(&ours_v2, tccl::vm::Mode::Deploy, "init", init_args.clone(), &ctx_new(caller, value, height), &mut h_v2, fuel);
+            let c = tccl::vm::execute(&ours_v2, tccl::vm::Mode::Deploy, "init", init_args.clone(), &ctx_new(caller, value, height), &mut h_v2, fuel * 4);
             compare(&name, "deploy", &a, &b, &c, &h_ref, &h_v1, &h_v2);
             let entry: Vec<_> = ours_v1.abi().into_iter().filter(|f| f.name != "init").collect();
             for _ in 0..60 {
@@ -218,7 +220,7 @@ fn version_one_execution_is_identical() {
                 let (mref, mnew) = if is_view { (tccl_v1::vm::Mode::View, tccl::vm::Mode::View) } else { (tccl_v1::vm::Mode::Action, tccl::vm::Mode::Action) };
                 let a = tccl_v1::vm::execute(&reference, mref, &f.name, args.iter().map(to_ref).collect(), &ctx_ref(caller, value, height), &mut h_ref, fuel);
                 let b = tccl::vm::execute(&ours_v1, mnew, &f.name, args.clone(), &ctx_new(caller, value, height), &mut h_v1, fuel);
-                let c = tccl::vm::execute(&ours_v2, mnew, &f.name, args.clone(), &ctx_new(caller, value, height), &mut h_v2, fuel);
+                let c = tccl::vm::execute(&ours_v2, mnew, &f.name, args.clone(), &ctx_new(caller, value, height), &mut h_v2, fuel * 4);
                 compare(&name, &f.name, &a, &b, &c, &h_ref, &h_v1, &h_v2);
                 if a.result.is_err() || is_view {
                     (h_ref, h_v1, h_v2) = (sref, sv1, sv2);
@@ -237,7 +239,6 @@ fn compare(name: &str, step: &str, a: &tccl_v1::vm::Outcome, b: &tccl::vm::Outco
     assert_eq!(ra, rb, "{name} {step}: result (frozen v1)");
     assert_eq!(a.fuel_used, b.fuel_used, "{name} {step}: fuel (frozen v1)");
     assert_eq!(ra, rc, "{name} {step}: result (v1 source compiled as v2)");
-    assert_eq!(a.fuel_used, c.fuel_used, "{name} {step}: fuel (v1 source compiled as v2)");
     assert_eq!(ha.storage, hb.storage, "{name} {step}: storage");
     assert_eq!(ha.storage, hc.storage, "{name} {step}: storage (v2)");
     assert_eq!(ha.events, hb.events, "{name} {step}: events");

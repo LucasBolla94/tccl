@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tccl", "crates/tccl-compat"]
+members = ["crates/tccl", "crates/tccl-cli", "crates/tccl-compat"]
 
 [workspace.package]
 version = "0.2.0"

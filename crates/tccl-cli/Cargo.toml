@@ -1,0 +1,20 @@
+[package]
+name = "tccl-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "tccl — command-line tool for TCCL, The Coin Cloud Language"
+
+[[bin]]
+name = "tccl"
+path = "src/main.rs"
+
+[dependencies]
+tccl = { path = "../tccl" }
+hex.workspace = true
+rand.workspace = true
+serde_json.workspace = true
+borsh.workspace = true
