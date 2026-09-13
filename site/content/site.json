@@ -1,0 +1,72 @@
+{
+  "languages": [
+    { "code": "en", "dir": "", "name": "English", "short": "EN" },
+    { "code": "pt-BR", "dir": "pt-BR", "name": "Português (Brasil)", "short": "PT" },
+    { "code": "es", "dir": "es", "name": "Español", "short": "ES" }
+  ],
+  "nav": [
+    { "id": "docs", "href": "/docs/index.html", "label": "docs" },
+    { "id": "playground", "href": "/playground/", "label": "playground" },
+    { "id": "download", "href": "/download/", "label": "download" }
+  ],
+  "footer": [
+    { "href": "https://github.com/LucasBolla94/tccl", "label": "source" },
+    { "href": "/docs/security.html", "label": "security" },
+    { "href": "/docs/versions.html", "label": "versions" },
+    { "href": "https://the-coin.cloud", "label": "theCoin" }
+  ],
+  "docs": ["index", "tutorial", "language", "modules", "calls", "permissions", "upgrades", "security", "fees", "errors", "recipes", "tools", "architecture", "versions"],
+  "strings": {
+    "en": {
+      "docs": "Documentation",
+      "docsNav": "Documentation pages",
+      "onThisPage": "On this page",
+      "playground": "Playground",
+      "download": "Download",
+      "skip": "Skip to content",
+      "menu": "Menu",
+      "footer": "TCCL — MIT or Apache-2.0",
+      "languageVersion": "language",
+      "source": "Source code",
+      "security": "Security",
+      "versions": "Versions",
+      "theCoin": "The Coin",
+      "editPage": "Improve this page on GitHub",
+      "downloadDescription": "Install the tccl command-line tool on Linux or Windows."
+    },
+    "pt-BR": {
+      "docs": "Documentação",
+      "docsNav": "Páginas da documentação",
+      "onThisPage": "Nesta página",
+      "playground": "Playground",
+      "download": "Baixar",
+      "skip": "Pular para o conteúdo",
+      "menu": "Menu",
+      "footer": "TCCL — MIT ou Apache-2.0",
+      "languageVersion": "linguagem",
+      "source": "Código-fonte",
+      "security": "Segurança",
+      "versions": "Versões",
+      "theCoin": "The Coin",
+      "editPage": "Melhore esta página no GitHub",
+      "downloadDescription": "Instale a ferramenta de linha de comando tccl no Linux ou no Windows."
+    },
+    "es": {
+      "docs": "Documentación",
+      "docsNav": "Páginas de la documentación",
+      "onThisPage": "En esta página",
+      "playground": "Playground",
+      "download": "Descargar",
+      "skip": "Saltar al contenido",
+      "menu": "Menú",
+      "footer": "TCCL — MIT o Apache-2.0",
+      "languageVersion": "lenguaje",
+      "source": "Código fuente",
+      "security": "Seguridad",
+      "versions": "Versiones",
+      "theCoin": "The Coin",
+      "editPage": "Mejore esta página en GitHub",
+      "downloadDescription": "Instale la herramienta de línea de comandos tccl en Linux o Windows."
+    }
+  }
+}

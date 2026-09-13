@@ -1,0 +1,117 @@
+<section class="wrap">
+  <div class="pg-banner" role="note">
+    <span class="badge sim">● {{simulation}}</span>
+    <span><strong>{{bannerTitle}}</strong> {{bannerText}}</span>
+    <span class="pg-networks" aria-label="{{networksLabel}}">
+      <span class="badge sim" aria-current="true">{{netSimulation}}</span>
+      <a class="badge" href="{{docs}}/tools.html#testnet">{{netTestnet}} ↗</a>
+      <a class="badge" href="{{docs}}/tools.html#mainnet">{{netMainnet}} ↗</a>
+    </span>
+  </div>
+  <noscript><p class="diag bad">{{noscript}}</p></noscript>
+  <div class="pg">
+    <div>
+      <div class="pg-toolbar">
+        <label class="visually-hidden" for="example">{{examples}}</label>
+        <select id="example"><option value="">{{examplesPlaceholder}}</option></select>
+        <button class="btn btn-small" id="open" type="button">{{openFile}}</button>
+        <input type="file" id="file" accept=".tccl,.txt,text/plain" hidden />
+        <button class="btn btn-small" id="save" type="button">{{saveFile}}</button>
+        <span class="spacer"></span>
+        <span id="engine-status" class="badge" aria-live="polite">{{loading}}</span>
+      </div>
+      <div class="editor">
+        <div class="gutter" id="gutter" aria-hidden="true"></div>
+        <div class="editor-area">
+          <pre id="hl" aria-hidden="true"><code></code></pre>
+          <textarea id="source" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" aria-label="{{editorLabel}}" aria-describedby="diagnostic"></textarea>
+        </div>
+      </div>
+      <div class="statusbar">
+        <span id="cursor">{{line}} 1, {{column}} 1</span>
+        <span id="compile-status" aria-live="polite"></span>
+        <span>{{tabHint}}</span>
+      </div>
+      <div id="diagnostic" aria-live="polite"></div>
+    </div>
+
+    <div class="pg-panel">
+      <div class="tabs" role="tablist" aria-label="{{panelsLabel}}">
+        <button role="tab" type="button" id="tab-interface" aria-controls="panel-interface" aria-selected="true">{{tabInterface}}</button>
+        <button role="tab" type="button" id="tab-state" aria-controls="panel-state" aria-selected="false">{{tabState}}</button>
+        <button role="tab" type="button" id="tab-activity" aria-controls="panel-activity" aria-selected="false">{{tabActivity}}</button>
+        <button role="tab" type="button" id="tab-scenario" aria-controls="panel-scenario" aria-selected="false">{{tabScenario}}</button>
+        <button role="tab" type="button" id="tab-session" aria-controls="panel-session" aria-selected="false">{{tabSession}}</button>
+      </div>
+
+      <div class="tab" role="tabpanel" id="panel-interface" aria-labelledby="tab-interface">
+        <div id="last-result" class="fn" aria-live="polite" hidden></div>
+        <div class="fn" id="deploy-box">
+          <header><strong>{{deployTitle}}</strong><span class="muted" id="deploy-name"></span></header>
+          <p class="muted" style="font-size:13px;margin:6px 0">{{deployHelp}}</p>
+          <div class="params" id="deploy-params"></div>
+          <div class="row">
+            <label>{{from}} <select id="deploy-from"></select></label>
+            <label>{{value}} <input id="deploy-value" placeholder="0" size="8" /></label>
+            <label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="deploy-final" /> {{finalCode}}</label>
+            <button class="btn btn-small btn-primary" id="deploy" type="button">{{deploy}}</button>
+          </div>
+        </div>
+        <label class="muted" style="font-size:12px">{{contract}}
+          <select id="contract-select"><option value="">{{noContract}}</option></select>
+        </label>
+        <div id="functions"><p class="muted">{{functionsEmpty}}</p></div>
+        <details class="fn" id="upgrade-box">
+          <summary><strong>{{upgradeTitle}}</strong></summary>
+          <p class="muted" style="font-size:13px">{{upgradeHelp}}</p>
+          <div class="row">
+            <label>{{from}} <select id="upgrade-from"></select></label>
+            <button class="btn btn-small" id="upgrade" type="button">{{upgradeButton}}</button>
+            <label>{{newAuthority}} <select id="authority-to"></select></label>
+            <button class="btn btn-small" id="authority" type="button">{{authorityButton}}</button>
+          </div>
+        </details>
+      </div>
+
+      <div class="tab" role="tabpanel" id="panel-state" aria-labelledby="tab-state" hidden>
+        <div id="state-view"><p class="muted">{{stateEmpty}}</p></div>
+      </div>
+
+      <div class="tab" role="tabpanel" id="panel-activity" aria-labelledby="tab-activity" hidden>
+        <p class="muted" style="font-size:13px">{{activityHelp}}</p>
+        <div id="activity"></div>
+      </div>
+
+      <div class="tab" role="tabpanel" id="panel-scenario" aria-labelledby="tab-scenario" hidden>
+        <p class="muted" style="font-size:13px">{{scenarioHelp}} <a href="{{docs}}/tools.html#scenarios">{{learnMore}}</a></p>
+        <label class="visually-hidden" for="scenario">{{tabScenario}}</label>
+        <textarea id="scenario" rows="14" style="width:100%;font-family:var(--mono)" spellcheck="false"></textarea>
+        <div class="row" style="margin:8px 0"><button class="btn btn-small btn-primary" id="run-scenario" type="button">{{runScenario}}</button></div>
+        <div id="scenario-report" aria-live="polite"></div>
+      </div>
+
+      <div class="tab" role="tabpanel" id="panel-session" aria-labelledby="tab-session" hidden>
+        <h3 style="font-size:16px">{{sessionTitle}}</h3>
+        <p class="muted" style="font-size:13px">{{sessionHelp}}</p>
+        <div class="row" style="margin-bottom:12px">
+          <label>{{height}} <input id="height" size="8" inputmode="numeric" /></label>
+          <button class="btn btn-small" id="set-height" type="button">{{setHeight}}</button>
+          <button class="btn btn-small" id="advance" type="button">+20</button>
+        </div>
+        <div class="row" style="margin-bottom:12px">
+          <button class="btn btn-small" id="export-session" type="button">{{exportSession}}</button>
+          <button class="btn btn-small" id="import-session" type="button">{{importSession}}</button>
+          <input type="file" id="session-file" accept=".json,application/json" hidden />
+          <button class="btn btn-small" id="reset-session" type="button">{{resetSession}}</button>
+        </div>
+        <h3 style="font-size:16px">{{limitsTitle}}</h3>
+        <ul class="muted" style="font-size:13px">
+          <li>{{limit1}}</li>
+          <li>{{limit2}}</li>
+          <li>{{limit3}}</li>
+          <li>{{limit4}}</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>

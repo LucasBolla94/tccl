@@ -18,3 +18,12 @@ hex.workspace = true
 rand = { workspace = true, features = ["std", "std_rng", "getrandom"] }
 serde_json.workspace = true
 borsh.workspace = true
+
+[package.metadata.deb]
+name = "tccl"
+maintainer = "The Coin contributors <https://github.com/LucasBolla94/tccl>"
+copyright = "The Coin contributors, MIT or Apache-2.0"
+extended-description = "Command-line tool for TCCL, the smart-contract language of The Coin: compile, check, simulate and test contracts."
+section = "devel"
+priority = "optional"
+assets = [["target/release/tccl", "usr/bin/tccl", "755"], ["../../README.md", "usr/share/doc/tccl/README.md", "644"]]

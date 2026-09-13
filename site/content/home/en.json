@@ -1,0 +1,46 @@
+{
+  "title": "TCCL — The Coin Cloud Language",
+  "description": "TCCL is the smart-contract language of The Coin: readable like Python, strictly typed, deterministic, with fuel limits, safe calls between contracts and a browser playground.",
+  "eyebrow": "The Coin Cloud Language · language version 2",
+  "headline": "Smart contracts you can read.",
+  "lead": "TCCL looks like Python — indented blocks, few keywords — but every value has a declared type, every step costs fuel, and the same code gives exactly the same result on every node of **The Coin**.",
+  "ctaPlayground": "Open the playground",
+  "ctaTutorial": "First contract in 10 minutes",
+  "ctaDownload": "Install tccl",
+  "note": "Free and open source (MIT or Apache-2.0). The playground runs the real engine in your browser — nothing is published.",
+  "sample": "cloud_coin.tccl",
+  "beginnersTitle": "Start with one file",
+  "beginnersLead": "A contract is a single `.tccl` file. The compiler tells you what is wrong, where, why and how to fix it — in English, Portuguese or Spanish.",
+  "beginners": [
+    { "title": "Readable by design", "text": "`state`, `action`, `view`, `require`, `emit`. No hidden conversions, no null, no floats: amounts are integers in motes." },
+    { "title": "Errors that teach", "text": "Every error has a line and column, a code like `C006`, an explanation and a suggested fix such as “did you mean `total`?”." },
+    { "title": "Test before you pay", "text": "`tccl test` runs plain-text scenarios; the playground shows state before and after, events and estimated fees." }
+  ],
+  "advancedTitle": "Grow into payments, privacy, games and exchanges",
+  "advancedLead": "Language version 2 adds what serious applications need, without making the simple things harder.",
+  "advanced": [
+    { "title": "Records and named situations", "text": "`record Order` with typed fields; `enum Status` with **allowed transitions** checked every time a value is stored." },
+    { "title": "Explicit permissions", "text": "`role manager`, `grant`, `revoke` and `only manager` on actions. Wallets see who may call what." },
+    { "title": "Calls between contracts", "text": "`interface Token` and `Token(addr).transfer(...)`. The callee sees the calling contract as `caller`; failures revert everything." },
+    { "title": "Standard library", "text": "`use std.token`, `use std.items`, `use std.payments`: tokens, unique items and conditional payments compiled into your contract." },
+    { "title": "Privacy where you need it", "text": "Linkable ring signatures (`ring_verify`) for private payment pools — with their limits documented, not hidden." },
+    { "title": "Upgrades with an authority", "text": "Contracts can be upgraded by their upgrade authority, or made final forever. Other contracts can check `is_final(addr)`." }
+  ],
+  "safetyTitle": "Protections the network always applies",
+  "safetyLead": "They are part of the engine. No contract, flag or setting turns them off.",
+  "safety": [
+    { "title": "Deterministic", "text": "No clock, no floats, no randomness, ordered storage. Every node computes the same result." },
+    { "title": "Checked arithmetic", "text": "Overflow and division by zero stop the call. `mul_div` computes a × b ÷ c without intermediate overflow." },
+    { "title": "Fuel and memory limits", "text": "Every operation costs fuel; version 2 also limits memory to 16 MiB per transaction and prices copies per allocation." },
+    { "title": "No re-entrancy", "text": "A contract already running in a transaction can never be called again during it." },
+    { "title": "Atomic", "text": "If anything fails — in any contract — every change, payment and event of the transaction is reverted. The fee is still paid." },
+    { "title": "Tested against the network", "text": "Version 1 compiles byte-for-byte like the engine deployed on The Coin, checked on more than 10 000 programs." }
+  ],
+  "honestTitle": "What TCCL does not promise",
+  "honest": [
+    "TCCL is an interpreter written in Rust. Rust gives memory safety and predictable performance; it does **not** make contracts run at native speed. We publish our measurements instead of slogans.",
+    "Nothing computed on a public blockchain is secret or random by itself. Data from the outside world is only as trustworthy as whoever signs it. The documentation explains these limits and the patterns that work around them."
+  ],
+  "ctaSecurity": "Security model",
+  "ctaVersions": "Versions and compatibility"
+}

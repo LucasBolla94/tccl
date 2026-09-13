@@ -175,6 +175,16 @@ fn run(mut args: Vec<String>) -> Result<(), String> {
             println!("{} — {}\n\n{}\n\n{}", x.code, x.title, x.explanation, x.fix);
             Ok(())
         }
+        "docs" => {
+            let c = common(&mut args)?;
+            match args.first().map(String::as_str) {
+                Some("errors") => {
+                    print!("{}", tccl::diagnostics::reference_markdown(c.lang));
+                    Ok(())
+                }
+                _ => Err("usage: tccl docs errors [--lang en|pt|es]".into()),
+            }
+        }
         "run" => run_sim(args),
         "test" => run_tests(args),
         "bench" => bench(),

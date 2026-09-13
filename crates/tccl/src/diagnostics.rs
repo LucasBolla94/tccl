@@ -475,10 +475,78 @@ pub fn explain_code(code: &str, lang: Lang) -> Option<Explanation> {
     None
 }
 
-const RUNTIME_CODES: [&str; 25] = [
+/// Every runtime error code.
+pub const RUNTIME_CODES: [&str; 25] = [
     "R001", "R002", "R003", "R004", "R005", "R006", "R007", "R008", "R009", "R010", "R011", "R012", "R013", "R014", "R015", "R016", "R017", "R018", "R019", "R020", "R021",
     "R022", "R023", "R024", "R025",
 ];
+
+/// The error reference page (`docs/<lang>/errors.md`), generated from this catalog.
+pub fn reference_markdown(lang: Lang) -> String {
+    let i = lang.idx();
+    let t = |en: &str, pt: &str, es: &str| [en, pt, es][i].to_string();
+    let mut out = String::new();
+    out.push_str(&format!("# {}\n\n", t("Error reference", "Referência de erros", "Referencia de errores")));
+    out.push_str(&t(
+        "> This page is generated from the compiler's catalog (`tccl docs errors`). The same explanations appear in `tccl check`, `tccl explain <code>` and the playground.\n\n",
+        "> Esta página é gerada a partir do catálogo do compilador (`tccl docs errors`). As mesmas explicações aparecem no `tccl check`, no `tccl explain <código>` e no playground.\n\n",
+        "> Esta página se genera a partir del catálogo del compilador (`tccl docs errors`). Las mismas explicaciones aparecen en `tccl check`, `tccl explain <código>` y el playground.\n\n",
+    ));
+    out.push_str(&t(
+        "Error *messages* are always in English because they are part of the compiler's behaviour (and, for language version 1, of chain history). The code, explanation and fix are translated.\n\n",
+        "As *mensagens* de erro são sempre em inglês porque fazem parte do comportamento do compilador (e, na versão 1 da linguagem, do histórico da blockchain). O código, a explicação e a correção são traduzidos.\n\n",
+        "Los *mensajes* de error siempre están en inglés porque forman parte del comportamiento del compilador (y, en la versión 1 del lenguaje, del historial de la cadena). El código, la explicación y la corrección están traducidos.\n\n",
+    ));
+    out.push_str(&format!("## {}\n\n", t("Compile errors", "Erros de compilação", "Errores de compilación")));
+    out.push_str(&t(
+        "A compile error is shown as `file:line:column`, with the code, a suggested fix and often a “did you mean” hint. A contract that does not compile is never deployed; on the network, a deployment transaction whose source fails to compile is rejected by the wallet before sending, and pays its fee if it is mined anyway.\n\n",
+        "Um erro de compilação aparece como `arquivo:linha:coluna`, com o código, uma correção sugerida e muitas vezes uma dica “você quis dizer”. Um contrato que não compila nunca é publicado; na rede, uma transação de publicação cujo código não compila é recusada pela carteira antes do envio, e paga a taxa se mesmo assim for minerada.\n\n",
+        "Un error de compilación se muestra como `archivo:línea:columna`, con el código, una corrección sugerida y a menudo una pista “¿quiso decir?”. Un contrato que no compila nunca se despliega; en la red, una transacción de despliegue cuyo código no compila es rechazada por la billetera antes de enviarla, y paga la comisión si aun así se mina.\n\n",
+    ));
+    for x in COMPILE {
+        out.push_str(&format!("### {} — {}\n\n{}\n\n**{}** {}\n\n", x.code, x.title[i], x.explanation[i], t("Fix:", "Correção:", "Corrección:"), x.fix[i]));
+        out.push_str(&format!("{} {}\n\n", t("Messages include:", "Mensagens incluem:", "Mensajes incluyen:"), x.patterns.iter().map(|p| format!("`{}`", p.replace('`', "'"))).collect::<Vec<_>>().join(", ")));
+    }
+    out.push_str(&format!("## {}\n\n", t("Runtime errors", "Erros de execução", "Errores de ejecución")));
+    out.push_str(&t(
+        "A runtime error stops the call. **Every effect of the transaction is reverted** — storage in every contract involved, TCN sent, events and the value attached to the call. The transaction fee is still paid, because the network did the work. Wallets simulate calls first and refuse to send a call that would fail.\n\n",
+        "Um erro de execução interrompe a chamada. **Todo efeito da transação é revertido** — o armazenamento de todos os contratos envolvidos, o TCN enviado, os eventos e o valor anexado à chamada. A taxa da transação continua paga, porque a rede fez o trabalho. As carteiras simulam as chamadas antes e se recusam a enviar uma chamada que falharia.\n\n",
+        "Un error de ejecución detiene la llamada. **Se revierte todo efecto de la transacción** — el almacenamiento de todos los contratos involucrados, el TCN enviado, los eventos y el valor adjunto a la llamada. La comisión de la transacción se paga igual, porque la red hizo el trabajo. Las billeteras simulan las llamadas antes y se niegan a enviar una llamada que fallaría.\n\n",
+    ));
+    out.push_str(&format!("| {} | {} | {} | {} |\n|---|---|---|---|\n", t("Code", "Código", "Código"), t("Error", "Erro", "Error"), t("Meaning", "Significado", "Significado"), t("Fix", "Correção", "Corrección")));
+    for code in RUNTIME_CODES {
+        let x = explain_code(code, lang).expect("runtime code");
+        let message = match code {
+            "R001" => "out of fuel",
+            "R002" => "requirement failed: …",
+            "R003" => "integer overflow",
+            "R004" => "division by zero",
+            "R005" => "index I out of bounds (length N)",
+            "R006" => "value too large",
+            "R007" => "call depth limit reached",
+            "R008" => "unknown function 'f'",
+            "R009" => "function 'f' cannot be called this way",
+            "R010" => "wrong arguments: …",
+            "R011" => "function does not accept TCN (not payable)",
+            "R012" => "state cannot be modified in a view",
+            "R013" => "invalid amount",
+            "R014" => "insufficient contract balance",
+            "R015" => "contract cannot be destroyed while it still has storage (N entries)",
+            "R016" => "host error: …",
+            "R017" => "internal type error: …",
+            "R018" => "re-entrant call: contract … is already running in this transaction",
+            "R019" => "contract call depth limit reached",
+            "R020" => "no contract at …",
+            "R021" => "interface mismatch: …",
+            "R022" => "memory limit reached (16777216 bytes)",
+            "R023" => "transition not allowed: E cannot go from A to B",
+            "R024" => "destroy() is only allowed when the contract is called directly by a transaction",
+            _ => "not supported: …",
+        };
+        out.push_str(&format!("| {} | `{}` | {} | {} |\n", x.code, message, x.explanation.replace('|', "\\|"), x.fix.replace('|', "\\|")));
+    }
+    out
+}
 
 #[cfg(test)]
 mod tests {

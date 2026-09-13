@@ -1,0 +1,29 @@
+<!-- Per-user MSI for tccl (WiX Toolset v4+). Built by .github/workflows/release.yml:
+     wix build installer/wix/tccl.wxs -d Version=0.3.0 -d BinDir=target/x86_64-pc-windows-msvc/release -o tccl.msi -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="tccl — The Coin Cloud Language" Manufacturer="The Coin contributors" Version="$(var.Version)"
+           UpgradeCode="6f1d2c55-7a4e-4b6b-9a62-3c9b1a7d2e41" Scope="perUser" InstallerVersion="500" Compressed="yes">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of tccl is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsDir" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="tccl">
+          <Component Id="TcclExe" Guid="b1f0f7e2-2a53-4a4e-8a5a-0b7f1a5d9c30">
+            <File Id="TcclExeFile" Source="$(var.BinDir)\tccl.exe" KeyPath="yes" />
+            <Environment Id="TcclPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="no" Permanent="no" />
+            <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+            <RemoveFolder Id="RemoveProgramsDir" Directory="ProgramsDir" On="uninstall" />
+          </Component>
+          <Component Id="Licenses" Guid="0c2b8e61-51d3-4f0f-9c1c-6b63b2a3f7d4">
+            <File Id="LicenseMit" Source="LICENSE-MIT" KeyPath="yes" />
+            <File Id="LicenseApache" Source="LICENSE-APACHE" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="Main" Title="tccl">
+      <ComponentRef Id="TcclExe" />
+      <ComponentRef Id="Licenses" />
+    </Feature>
+  </Package>
+</Wix>

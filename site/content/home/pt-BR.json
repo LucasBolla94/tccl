@@ -1,0 +1,46 @@
+{
+  "title": "TCCL — The Coin Cloud Language",
+  "description": "TCCL é a linguagem de contratos inteligentes da The Coin: legível como Python, com tipos estritos, determinística, com limites de combustível, chamadas seguras entre contratos e um playground no navegador.",
+  "eyebrow": "The Coin Cloud Language · versão 2 da linguagem",
+  "headline": "Contratos inteligentes que você consegue ler.",
+  "lead": "A TCCL parece Python — blocos por indentação, poucas palavras-chave — mas todo valor tem tipo declarado, todo passo custa combustível e o mesmo código dá exatamente o mesmo resultado em todos os nós da **The Coin**.",
+  "ctaPlayground": "Abrir o playground",
+  "ctaTutorial": "Primeiro contrato em 10 minutos",
+  "ctaDownload": "Instalar o tccl",
+  "note": "Livre e de código aberto (MIT ou Apache-2.0). O playground roda o motor real no seu navegador — nada é publicado.",
+  "sample": "cloud_coin.tccl",
+  "beginnersTitle": "Comece com um arquivo",
+  "beginnersLead": "Um contrato é um único arquivo `.tccl`. O compilador diz o que está errado, onde, por quê e como corrigir — em inglês, português ou espanhol.",
+  "beginners": [
+    { "title": "Legível por projeto", "text": "`state`, `action`, `view`, `require`, `emit`. Sem conversões escondidas, sem null, sem números de ponto flutuante: valores são inteiros em motes." },
+    { "title": "Erros que ensinam", "text": "Todo erro tem linha e coluna, um código como `C006`, uma explicação e uma correção sugerida como “você quis dizer `total`?”." },
+    { "title": "Teste antes de pagar", "text": "`tccl test` roda cenários em texto simples; o playground mostra o estado antes e depois, os eventos e as taxas estimadas." }
+  ],
+  "advancedTitle": "Evolua para pagamentos, privacidade, jogos e corretoras",
+  "advancedLead": "A versão 2 da linguagem traz o que aplicações sérias precisam, sem complicar o que é simples.",
+  "advanced": [
+    { "title": "Records e situações nomeadas", "text": "`record Order` com campos tipados; `enum Status` com **transições permitidas** verificadas toda vez que um valor é gravado." },
+    { "title": "Permissões explícitas", "text": "`role manager`, `grant`, `revoke` e `only manager` nas actions. As carteiras mostram quem pode chamar o quê." },
+    { "title": "Chamadas entre contratos", "text": "`interface Token` e `Token(addr).transfer(...)`. O contrato chamado vê quem chamou como `caller`; falhas revertem tudo." },
+    { "title": "Biblioteca padrão", "text": "`use std.token`, `use std.items`, `use std.payments`: tokens, itens únicos e pagamentos condicionais compilados dentro do seu contrato." },
+    { "title": "Privacidade onde precisa", "text": "Assinaturas em anel vinculáveis (`ring_verify`) para pools de pagamentos privados — com os limites documentados, não escondidos." },
+    { "title": "Upgrades com autoridade", "text": "Contratos podem ser atualizados pela sua autoridade de upgrade ou tornados finais para sempre. Outros contratos podem conferir `is_final(addr)`." }
+  ],
+  "safetyTitle": "Proteções que a rede sempre aplica",
+  "safetyLead": "Elas fazem parte do motor. Nenhum contrato, opção ou configuração as desliga.",
+  "safety": [
+    { "title": "Determinística", "text": "Sem relógio, sem ponto flutuante, sem aleatoriedade, armazenamento ordenado. Todo nó calcula o mesmo resultado." },
+    { "title": "Aritmética verificada", "text": "Estouro e divisão por zero interrompem a chamada. `mul_div` calcula a × b ÷ c sem estouro intermediário." },
+    { "title": "Limites de combustível e memória", "text": "Toda operação custa combustível; a versão 2 também limita a memória a 16 MiB por transação e cobra cópias por alocação." },
+    { "title": "Sem reentrada", "text": "Um contrato que já está rodando numa transação nunca pode ser chamado de novo durante ela." },
+    { "title": "Atômica", "text": "Se algo falha — em qualquer contrato — toda mudança, pagamento e evento da transação é revertido. A taxa continua paga." },
+    { "title": "Testada contra a rede", "text": "A versão 1 compila byte a byte igual ao motor que está na The Coin, conferido em mais de 10 000 programas." }
+  ],
+  "honestTitle": "O que a TCCL não promete",
+  "honest": [
+    "A TCCL é um interpretador escrito em Rust. Rust traz segurança de memória e desempenho previsível; **não** faz contratos rodarem em velocidade nativa. Publicamos nossas medições em vez de slogans.",
+    "Nada calculado numa blockchain pública é secreto ou aleatório por si só. Dados do mundo externo só são tão confiáveis quanto quem os assina. A documentação explica esses limites e os padrões que os contornam."
+  ],
+  "ctaSecurity": "Modelo de segurança",
+  "ctaVersions": "Versões e compatibilidade"
+}

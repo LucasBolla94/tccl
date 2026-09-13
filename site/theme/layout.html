@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="{{lang}}">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{title}}</title>
+    <meta name="description" content="{{description}}" />
+    <meta name="theme-color" content="#f7f7f2" />
+    <link rel="canonical" href="{{canonical}}" />
+    {{hreflang}}
+    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="{{css}}" />
+  </head>
+  <body>
+    <a class="skip" href="#main">{{skip}}</a>
+    <header class="site-header">
+      <div class="wrap header-inner">
+        <a class="brand" href="{{home}}" aria-label="TCCL"><span class="brand-mark" aria-hidden="true">tc</span>tccl<small>The Coin Cloud Language</small></a>
+        <button class="menu-toggle" type="button" aria-controls="navigation" aria-expanded="false">{{menu}} ☰</button>
+        <nav class="nav" id="navigation" aria-label="Main">
+          {{nav}}
+          <span class="lang-switch">{{langSwitch}}</span>
+        </nav>
+      </div>
+    </header>
+    <main id="main">{{content}}</main>
+    <footer class="site-footer">{{footer}}</footer>
+    <script src="/assets/site.js" defer></script>
+    {{scripts}}
+  </body>
+</html>

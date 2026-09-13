@@ -430,3 +430,57 @@ fn programs_round_trip_and_version_one_bytes_are_stable() {
         }
     }
 }
+
+#[test]
+fn language_reference_claims() {
+    let src = r#"
+contract Claims
+enum Color: Red, Green, Blue
+record Point:
+    x: int
+    tag: text
+state by_color: map[Color, int]
+state origin_point: Point
+state fav: Color = Color.Green
+event Moved(p: Point, c: Color)
+interface Other:
+    view ping() -> int
+
+action paint(c: Color, n: int):
+    by_color[c] += n
+
+action move(p: Point) payable -> Point:
+    origin_point = p
+    emit Moved(p, fav)
+    return origin_point
+
+action reset():
+    origin_point = Point(x: 0, tag: "")
+
+view count(c: Color) -> int:
+    return by_color[c]
+
+view same(a: address) -> bool:
+    return Other(a) == a
+
+view name(c: Color) -> text:
+    return to_text(c)
+"#;
+    let mut sim = Simulator::new();
+    let c = deploy(&mut sim, src, "alice", vec![]);
+    ok(&mut sim, &c, "alice", "paint", vec![int(2), int(5)], 0);
+    assert_eq!(view(&mut sim, &c, "count", vec![int(2)]), int(5));
+    let p = Value::List(vec![int(3), Value::Text("a".into())]);
+    let r = sim.call(&c, account("alice"), "move", vec![p.clone()], 1).unwrap();
+    assert_eq!(r.result.unwrap(), p);
+    assert_eq!(r.events[0].fields[1].1, int(1));
+    let before = sim.contracts[&c].storage.len();
+    ok(&mut sim, &c, "alice", "reset", vec![], 0);
+    assert_eq!(sim.contracts[&c].storage.len(), before - 1, "storing the default record deletes the entry");
+    assert_eq!(view(&mut sim, &c, "same", vec![addr("x")]), Value::Bool(true));
+    assert_eq!(view(&mut sim, &c, "name", vec![int(0)]), Value::Text("Red".into()));
+    // Version 1 names that are contextual words in version 2 still compile.
+    let legacy = "contract L\nstate record: int\naction upgrade_it(to: address, from: address, value2: int):\n    record += value2\nfn only() -> int:\n    return 1\n";
+    compile(legacy, &CompileOptions { version: 1, ..Default::default() }).unwrap();
+    compile(legacy, &CompileOptions::default()).unwrap();
+}

@@ -182,7 +182,7 @@ impl Host for SimHost<'_> {
     }
 
     fn emit(&mut self, event: &str, fields: Vec<(String, Value)>) -> Result<(), VmError> {
-        if self.events.len() >= 256 {
+        if self.events.len() >= 64 {
             return Err(VmError::TooLarge);
         }
         let contract = self.current().to_string();

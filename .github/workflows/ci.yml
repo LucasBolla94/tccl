@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Unit, integration, recipe and compatibility tests
+        run: cargo test --workspace --release
+      - name: CLI runs the recipe scenarios
+        run: cargo run --release -p tccl-cli -- test examples
+
+  wasm-and-site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93.1
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the WebAssembly engine
+        run: cargo build -p tccl-wasm --target wasm32-unknown-unknown --profile wasm
+      - name: Error reference is up to date
+        run: |
+          for lang in en pt-BR es; do
+            cargo run --release -p tccl-cli -- docs errors --lang "$lang" > "/tmp/errors-$lang.md"
+            diff -u "docs/$lang/errors.md" "/tmp/errors-$lang.md"
+          done
+      - name: Build the site
+        run: node site/build.mjs
+      - name: Smoke-test the engine in Node
+        run: node site/tests/engine.test.mjs

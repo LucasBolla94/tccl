@@ -1,0 +1,132 @@
+name: release
+
+# Push a tag like v0.3.0 to build binaries and installers and publish a GitHub release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, archive: tar.gz }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl, archive: tar.gz, cross: true }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, archive: zip }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@1.93.1
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --locked --version 0.2.5
+      - name: Build
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --locked -p tccl-cli --target ${{ matrix.target }}
+          else
+            cargo build --release --locked -p tccl-cli --target ${{ matrix.target }}
+          fi
+      - name: Smoke test
+        if: "!matrix.cross"
+        shell: bash
+        run: |
+          bin=target/${{ matrix.target }}/release/tccl
+          "$bin" version
+          "$bin" test examples
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist stage
+          name=tccl-${{ matrix.target }}
+          cp LICENSE-MIT LICENSE-APACHE README.md stage/
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            cp target/${{ matrix.target }}/release/tccl.exe stage/
+            (cd stage && 7z a -tzip "../dist/$name.zip" . >/dev/null)
+          else
+            cp target/${{ matrix.target }}/release/tccl stage/
+            tar -czf "dist/$name.tar.gz" -C stage .
+          fi
+      - name: MSI installer
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          version="${GITHUB_REF_NAME#v}"
+          case "$version" in [0-9]*) ;; *) version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2) ;; esac
+          wix build installer/wix/tccl.wxs -d Version="$version" -d BinDir=target/${{ matrix.target }}/release -o dist/tccl-${{ matrix.target }}.msi
+      - name: Debian package
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          cargo install cargo-deb --locked --version 2.7.0
+          cargo deb -p tccl-cli --target ${{ matrix.target }} --no-build --output dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tccl-${{ matrix.target }}
+          path: dist/tccl*
+
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@1.93.1
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo build --locked -p tccl-wasm --target wasm32-unknown-unknown --profile wasm
+      - run: mkdir -p dist && cp target/wasm32-unknown-unknown/wasm/tccl_wasm.wasm dist/tccl-engine.wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tccl-engine
+          path: dist/*
+
+  publish:
+    needs: [build, engine]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cp installer/install.sh installer/install.ps1 artifacts/
+          cd artifacts
+          sha256sum tccl* install.sh install.ps1 > SHA256SUMS
+          cat SHA256SUMS
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          notes=$(awk "/^## \\[${tag#v}\\]/{flag=1;next}/^## \\[/{flag=0}flag" CHANGELOG.md)
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" artifacts/* --clobber
+          else
+            gh release create "$tag" artifacts/* --title "tccl $tag" --notes "${notes:-See CHANGELOG.md}"
+          fi
