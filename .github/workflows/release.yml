@@ -75,7 +75,7 @@ jobs:
           dotnet tool install --global wix --version 5.0.2
           version="${GITHUB_REF_NAME#v}"
           case "$version" in [0-9]*) ;; *) version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2) ;; esac
-          wix build installer/wix/tccl.wxs -d Version="$version" -d BinDir=target/${{ matrix.target }}/release -o dist/tccl-${{ matrix.target }}.msi
+          wix build installer/wix/tccl.wxs -d Version="$version" -d BinDir=target/${{ matrix.target }}/release -d RootDir=. -o dist/tccl-${{ matrix.target }}.msi
       - name: Debian package
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |

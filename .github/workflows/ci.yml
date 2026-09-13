@@ -49,5 +49,7 @@ jobs:
           done
       - name: Build the site
         run: node site/build.mjs
+      - name: Links and anchors
+        run: node site/tests/links.test.mjs
       - name: Smoke-test the engine in Node
         run: node site/tests/engine.test.mjs

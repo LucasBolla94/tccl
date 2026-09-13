@@ -484,3 +484,51 @@ view name(c: Color) -> text:
     compile(legacy, &CompileOptions { version: 1, ..Default::default() }).unwrap();
     compile(legacy, &CompileOptions::default()).unwrap();
 }
+
+#[test]
+fn version_one_contracts_cannot_be_called_and_hardening_is_opt_in() {
+    let mut sim = Simulator::new();
+    let (old, d) = sim.deploy_with(&src("counter.tccl"), account("dev"), vec![], 0, &DeployOptions { language: 1, ..Default::default() }).unwrap();
+    d.result.unwrap();
+    let caller = "contract C\ninterface Counter:\n    action increment(amount: int)\naction poke(c: address):\n    Counter(c).increment(1)\n";
+    let c = deploy(&mut sim, caller, "dev", vec![]);
+    assert_eq!(fails(&mut sim, &c, "dev", "poke", vec![contract(&old)], 0), VmError::Unsupported("calls into language version 1 contracts".into()));
+
+    // The same version 1 program with and without the network's hardening switch.
+    let src = "contract B\naction run(n: int) -> int:\n    let xs: list[text] = []\n    for i in range(0, 4000):\n        xs.push(\"a\")\n    let c: int = 0\n    for i in range(0, n):\n        c += len(xs)\n    return c\n";
+    let p = compile(src, &CompileOptions { version: 1, ..Default::default() }).unwrap();
+    #[derive(Default)]
+    struct Mem(std::collections::BTreeMap<Vec<u8>, Vec<u8>>);
+    impl tccl::vm::Host for Mem {
+        fn storage_read(&mut self, k: &[u8]) -> Result<Option<Vec<u8>>, VmError> {
+            Ok(self.0.get(k).cloned())
+        }
+        fn storage_write(&mut self, k: &[u8], v: Option<Vec<u8>>) -> Result<(), VmError> {
+            match v {
+                Some(v) => self.0.insert(k.to_vec(), v),
+                None => self.0.remove(k),
+            };
+            Ok(())
+        }
+        fn balance(&mut self) -> Result<u64, VmError> {
+            Ok(0)
+        }
+        fn send(&mut self, _: &[u8; 20], _: u64) -> Result<(), VmError> {
+            Ok(())
+        }
+        fn emit(&mut self, _: &str, _: Vec<(String, Value)>) -> Result<(), VmError> {
+            Ok(())
+        }
+        fn storage_items(&mut self) -> Result<u64, VmError> {
+            Ok(0)
+        }
+        fn destroy(&mut self, _: &[u8; 20]) -> Result<(), VmError> {
+            Ok(())
+        }
+    }
+    let ctx = tccl::vm::CallContext { caller: [1; 20], value: 0, height: 1, self_address: [2; 20] };
+    let plain = tccl::vm::execute(&p, tccl::vm::Mode::Action, "run", vec![int(2000)], &ctx, &mut Mem::default(), 10_000_000);
+    let hard = tccl::vm::execute_with(&p, tccl::vm::Mode::Action, "run", vec![int(2000)], &ctx, &mut Mem::default(), 10_000_000, tccl::vm::ExecOptions { harden_v1: true });
+    assert_eq!(plain.result, hard.result);
+    assert!(plain.fuel_used > hard.fuel_used, "len(xs) no longer copies the list: {} vs {}", plain.fuel_used, hard.fuel_used);
+}

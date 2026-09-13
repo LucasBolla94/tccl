@@ -1,5 +1,5 @@
 <!-- Per-user MSI for tccl (WiX Toolset v4+). Built by .github/workflows/release.yml:
-     wix build installer/wix/tccl.wxs -d Version=0.3.0 -d BinDir=target/x86_64-pc-windows-msvc/release -o tccl.msi -->
+     wix build installer/wix/tccl.wxs -d Version=0.3.0 -d BinDir=target/x86_64-pc-windows-msvc/release -d RootDir=. -o tccl.msi -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package Name="tccl — The Coin Cloud Language" Manufacturer="The Coin contributors" Version="$(var.Version)"
            UpgradeCode="6f1d2c55-7a4e-4b6b-9a62-3c9b1a7d2e41" Scope="perUser" InstallerVersion="500" Compressed="yes">
@@ -15,8 +15,8 @@
             <RemoveFolder Id="RemoveProgramsDir" Directory="ProgramsDir" On="uninstall" />
           </Component>
           <Component Id="Licenses" Guid="0c2b8e61-51d3-4f0f-9c1c-6b63b2a3f7d4">
-            <File Id="LicenseMit" Source="LICENSE-MIT" KeyPath="yes" />
-            <File Id="LicenseApache" Source="LICENSE-APACHE" />
+            <File Id="LicenseMit" Source="$(var.RootDir)\LICENSE-MIT" KeyPath="yes" />
+            <File Id="LicenseApache" Source="$(var.RootDir)\LICENSE-APACHE" />
           </Component>
         </Directory>
       </Directory>

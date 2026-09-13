@@ -248,7 +248,7 @@ function build() {
         headings.filter((h) => h.level === 2).length > 2
           ? `<h2>${escapeHtml(strings.onThisPage)}</h2><ol>${headings
               .filter((h) => h.level === 2)
-              .map((h) => `<li><a href="#${h.id}">${escapeHtml(h.text.replace(/`/g, ""))}</a></li>`)
+              .map((h) => `<li><a href="#${h.id}">${escapeHtml(h.text.replace(/`|\*\*/g, ""))}</a></li>`)
               .join("")}</ol>`
           : ""
       }</nav>`;

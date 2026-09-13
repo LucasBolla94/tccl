@@ -140,6 +140,16 @@ pub enum Mode {
     Upgrade,
 }
 
+/// Execution switches chosen by the network (consensus parameters), not by contracts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExecOptions {
+    /// Apply the version 2 resource rules (allocation-priced copies and decodes,
+    /// non-copying `xs[i]`/`len(xs)`, 16 MiB memory limit) to version 1 programs too.
+    /// Off by default: turning it on changes the fuel of historical contracts, so a
+    /// network may only enable it from an activation height.
+    pub harden_v1: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Outcome {
     pub result: Result<Value, VmError>,
@@ -186,6 +196,7 @@ struct Vm<'a, H: Host> {
     depth: usize,
     read_only: bool,
     // ---- version 2 ----
+    options: ExecOptions,
     origin: [u8; 20],
     /// Contracts running in this transaction (outermost first).
     stack: Vec<[u8; 20]>,
@@ -205,7 +216,23 @@ pub fn execute<H: Host>(
     host: &mut H,
     fuel_limit: u64,
 ) -> Outcome {
+    execute_with(program, mode, function, args, ctx, host, fuel_limit, ExecOptions::default())
+}
+
+/// [`execute`] with network execution options.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_with<H: Host>(
+    program: &Program,
+    mode: Mode,
+    function: &str,
+    args: Vec<Value>,
+    ctx: &CallContext,
+    host: &mut H,
+    fuel_limit: u64,
+    options: ExecOptions,
+) -> Outcome {
     let mut vm = Vm {
+        options,
         program,
         host,
         ctx,
@@ -302,14 +329,15 @@ impl<'a, H: Host> Vm<'a, H> {
         self.call(idx, args)
     }
 
-    fn v2(&self) -> bool {
-        self.program.version >= 2
+    /// Version 2 resource rules: memory limit and allocation-based prices.
+    fn hardened(&self) -> bool {
+        self.program.version >= 2 || self.options.harden_v1
     }
 
     /// Fuel to copy a value: per 32 bytes, plus per heap allocation in version 2.
     fn charge_copy(&mut self, v: &Value) -> Result<(), VmError> {
         let mut cost = v.size() as u64 / 32 * fuel::PER_32_BYTES;
-        if self.v2() {
+        if self.hardened() {
             cost += heap_nodes(v) * fuel::CLONE_NODE;
         }
         self.charge(cost)
@@ -317,7 +345,7 @@ impl<'a, H: Host> Vm<'a, H> {
 
     /// Version 2 memory accounting: `delta` bytes more (or fewer) held by locals.
     fn memory(&mut self, add: u64, remove: u64) -> Result<(), VmError> {
-        if !self.v2() {
+        if !self.hardened() {
             return Ok(());
         }
         self.mem_used = self.mem_used.saturating_sub(remove).saturating_add(add);
@@ -342,7 +370,7 @@ impl<'a, H: Host> Vm<'a, H> {
             locals[i] = a;
         }
         let flow = self.block(&f.body, &mut locals)?;
-        if self.v2() {
+        if self.hardened() {
             let held: u64 = locals.iter().map(|v| v.size() as u64).sum::<u64>() + f.locals as u64;
             self.mem_used = self.mem_used.saturating_sub(held);
         }
@@ -594,7 +622,7 @@ impl<'a, H: Host> Vm<'a, H> {
     /// Decodes a stored value; version 2 also pays for the allocations of large values.
     fn load_value(&mut self, bytes: &[u8]) -> Result<Value, VmError> {
         let v = Self::decode_value(bytes)?;
-        if self.v2() {
+        if self.hardened() {
             self.charge(bytes.len() as u64 / 32 * fuel::PER_32_BYTES + heap_nodes(&v) * fuel::DECODE_NODE)?;
         }
         Ok(v)
@@ -666,7 +694,7 @@ impl<'a, H: Host> Vm<'a, H> {
                 locals[*slot as usize].clone()
             }
             // Version 2: read an item of a local list/record without copying the whole value.
-            Expr::Index { base, index } if self.v2() && matches!(**base, Expr::Local(_)) => {
+            Expr::Index { base, index } if self.hardened() && matches!(**base, Expr::Local(_)) => {
                 let Expr::Local(slot) = **base else { unreachable!() };
                 self.charge(fuel::EXPR)?;
                 let i = self.eval_int(index, locals)?;
@@ -885,6 +913,11 @@ impl<'a, H: Host> Vm<'a, H> {
         value: u64,
     ) -> Result<Value, VmError> {
         self.charge(fuel::LOAD_BASE + code_len as u64 / fuel::LOAD_PER_BYTES)?;
+        if program.version < 2 {
+            // Version 1 contracts were written when `caller` was always the signer of a
+            // transaction; letting contracts call them could break their assumptions.
+            return Err(VmError::Unsupported("calls into language version 1 contracts".into()));
+        }
         let (idx, f) = program.find(function).ok_or_else(|| VmError::UnknownFunction(function.to_string()))?;
         if f.kind != kind {
             return Err(VmError::NotCallable(function.to_string()));
@@ -910,6 +943,7 @@ impl<'a, H: Host> Vm<'a, H> {
         let mut stack = std::mem::take(&mut self.stack);
         stack.push(target);
         let mut child = Vm {
+            options: self.options,
             program,
             host: &mut *self.host,
             ctx: &ctx,
@@ -932,7 +966,7 @@ impl<'a, H: Host> Vm<'a, H> {
 
     fn builtin(&mut self, f: Builtin, args: &[Expr], locals: &[Value]) -> Result<Value, VmError> {
         Ok(match f {
-            Builtin::Len if self.v2() && matches!(args[0], Expr::Local(_)) => {
+            Builtin::Len if self.hardened() && matches!(args[0], Expr::Local(_)) => {
                 let Expr::Local(slot) = args[0] else { unreachable!() };
                 self.charge(fuel::EXPR)?;
                 match &locals[slot as usize] {

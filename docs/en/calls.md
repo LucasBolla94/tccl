@@ -111,6 +111,7 @@ init(token_address: address):
 | Memory | 16 MiB of values across every running function |
 | Cost of a call | 700 fuel + 1 per 32 bytes of arguments + loading 100 + 1 per 100 bytes of code |
 | `destroy()` | Only when the contract is called directly by a transaction |
+| Language version 1 contracts | Cannot be called by other contracts (`not supported: calls into language version 1 contracts`): they were written when `caller` was always a signer |
 
 ## Example: an exchange pool
 

@@ -1,0 +1,7 @@
+# Source files must be byte-identical on every platform: module source hashes are
+# part of compiled programs, and TCCL files are consensus input.
+* text=auto eol=lf
+*.pdf binary
+*.woff2 binary
+*.wasm binary
+*.png binary
