@@ -1,0 +1,9 @@
+# Recipe (language 1 contract): escrow with an arbiter.
+deploy escrow.tccl as deal @seller @arbiter 100 --from buyer --value 10tcn
+call deal release --from seller
+expect fail "only the buyer"
+call deal dispute --from seller
+expect event Disputed
+call deal resolve true --from arbiter
+expect event Settled
+expect balance @seller 1000010tcn

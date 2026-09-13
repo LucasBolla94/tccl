@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tccl", "crates/tccl-cli", "crates/tccl-compat"]
+members = ["crates/tccl", "crates/tccl-cli", "crates/tccl-compat", "crates/tccl-wasm"]
 
 [workspace.package]
 version = "0.2.0"
@@ -20,7 +20,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
 thiserror = "2"
-rand = "0.8"
+rand = { version = "0.8", default-features = false }
 
 [profile.release]
 opt-level = 3
@@ -28,3 +28,9 @@ lto = "thin"
 codegen-units = 4
 strip = true
 panic = "abort"
+
+[profile.wasm]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1

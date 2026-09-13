@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-const EXAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../tccl/examples");
+const EXAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
 
 macro_rules! mem_host {
     ($name:ident, $krate:ident) => {

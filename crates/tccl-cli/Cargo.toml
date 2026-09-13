@@ -15,6 +15,6 @@ path = "src/main.rs"
 [dependencies]
 tccl = { path = "../tccl" }
 hex.workspace = true
-rand.workspace = true
+rand = { workspace = true, features = ["std", "std_rng", "getrandom"] }
 serde_json.workspace = true
 borsh.workspace = true

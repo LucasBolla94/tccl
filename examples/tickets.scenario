@@ -1,0 +1,15 @@
+# Recipe: tickets as unique items (std.items).
+deploy tickets.tccl as tickets 2 --from org
+call tickets issue @ann "A1" --from org
+expect result 1
+call tickets issue @ben "A2" --from org
+call tickets issue @cat "A3" --from org
+expect fail "sold out"
+call tickets issue @cat "A3" --from ann
+expect fail "only organizer"
+call tickets transfer_item 1 @cat --from ann
+expect event ItemTransferred
+view tickets owner_of 1
+expect result @cat
+call tickets check_in 1 --from org
+expect event ItemBurned

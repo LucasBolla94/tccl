@@ -1,0 +1,21 @@
+# Recipe: a token with the standard module and a minter role.
+deploy cloud_coin.tccl as coin 1000 --from issuer
+view coin balance_of @issuer
+expect result 1000
+call coin mint @mallory 5 --from mallory
+expect fail "only minter"
+call coin add_minter @bob --from issuer
+expect event RoleGranted
+call coin mint @carol 7 --from bob
+expect ok
+call coin transfer @dave 3 --from carol
+expect event Transfer
+call coin transfer @dave 5 --from carol
+expect fail "insufficient token balance"
+call coin approve @erin 2 --from dave
+call coin transfer_from @dave @erin 2 --from erin
+expect ok
+view coin balance_of @erin
+expect result 2
+view coin total_supply_of
+expect result 1007

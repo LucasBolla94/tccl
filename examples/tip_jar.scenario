@@ -1,0 +1,11 @@
+# Recipe: a tip jar (payable action, owner-only withdrawal).
+deploy tip_jar.tccl as jar --from owner
+call jar tip "great work" --from fan --value 3tcn
+expect ok
+expect balance jar 3tcn
+call jar withdraw 1tcn --from fan
+expect fail
+call jar withdraw 2tcn --from owner
+expect ok
+expect balance @owner 1000002tcn
+expect balance jar 1tcn

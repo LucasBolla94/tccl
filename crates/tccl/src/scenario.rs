@@ -30,6 +30,13 @@ use crate::program::{Program, Type, Value};
 use crate::sim::{account, CallResult, DeployOptions, Simulator};
 use std::collections::BTreeMap;
 
+/// The outcome that `expect` checks: a call, or a transaction the chain refused
+/// before running (wrong upgrade authority, incompatible upgrade, compile error).
+enum Last {
+    Call(CallResult, Option<Program>),
+    Rejected(String),
+}
+
 /// Result of running one scenario.
 #[derive(Clone, Debug, Default, serde::Serialize)]
 pub struct Report {
@@ -118,7 +125,7 @@ pub fn run(script: &str, read: &dyn Fn(&str) -> Result<String, String>) -> Repor
     let mut report = Report::default();
     let mut sim = Simulator::new();
     let mut names: BTreeMap<String, String> = BTreeMap::new();
-    let mut last: Option<(CallResult, Option<Program>)> = None;
+    let mut last: Option<Last> = None;
     let hrp = "tcr";
     for (n, raw) in script.lines().enumerate() {
         let line = raw.trim();
@@ -146,6 +153,39 @@ fn resolve_address(word: &str, names: &BTreeMap<String, String>) -> Option<Value
     Some(Value::Address(a))
 }
 
+/// Replaces `@account` and `$contract` inside composite literals with addresses.
+fn substitute(raw: &str, names: &BTreeMap<String, String>, hrp: &str) -> String {
+    let mut out = String::new();
+    let mut chars = raw.chars().peekable();
+    let mut quote = false;
+    while let Some(c) = chars.next() {
+        if c == '"' {
+            quote = !quote;
+        }
+        if !quote && (c == '@' || c == '$') {
+            let mut word = String::new();
+            while let Some(n) = chars.peek() {
+                if n.is_ascii_alphanumeric() || *n == '_' {
+                    word.push(*n);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            match resolve_address(&format!("{c}{word}"), names) {
+                Some(Value::Address(a)) => out.push_str(&crate::abi::format_address(&a, hrp)),
+                _ => {
+                    out.push(c);
+                    out.push_str(&word);
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn args_for(program: &Program, function: &str, raw: &[String], names: &BTreeMap<String, String>) -> Result<Vec<Value>, String> {
     let params: Vec<(String, Type)> = match program.find(function) {
         Some((_, f)) => f.params.clone(),
@@ -168,7 +208,7 @@ fn args_for(program: &Program, function: &str, raw: &[String], names: &BTreeMap<
                     return Ok(v);
                 }
             }
-            parse_arg_in(program, a, t).map_err(|e| format!("argument '{name}': {e}"))
+            parse_arg_in(program, &substitute(a, names, "tcr"), t).map_err(|e| format!("argument '{name}': {e}"))
         })
         .collect()
 }
@@ -178,7 +218,7 @@ fn run_line(
     line: &str,
     sim: &mut Simulator,
     names: &mut BTreeMap<String, String>,
-    last: &mut Option<(CallResult, Option<Program>)>,
+    last: &mut Option<Last>,
     read: &dyn Fn(&str) -> Result<String, String>,
     hrp: &str,
     report: &mut Report,
@@ -208,14 +248,21 @@ fn run_line(
             words.remove(0);
             let name = words.remove(0);
             let src = read(&file)?;
-            let program = crate::compile(&src, &crate::CompileOptions { version: o.language, ..Default::default() }).map_err(|e| format!("{file}:{e}"))?;
+            let program = match crate::compile(&src, &crate::CompileOptions { version: o.language, ..Default::default() }) {
+                Ok(p) => p,
+                Err(e) => {
+                    report.log.push(format!("deploy {file}: compile error: {e}"));
+                    *last = Some(Last::Rejected(format!("compile error: {e}")));
+                    return Ok(());
+                }
+            };
             let args = args_for(&program, "init", &words, names)?;
             let (addr, r) = sim.deploy_with(&src, account(&o.from), args, o.value, &DeployOptions { language: o.language, final_code: o.final_code })?;
             report.log.push(format!("deploy {file} as {name}\n{}", describe(&r, Some(&program))));
             if r.result.is_ok() {
                 names.insert(name, addr);
             }
-            *last = Some((r, Some(program)));
+            *last = Some(Last::Call(r, Some(program)));
         }
         "call" | "view" => {
             let o = take_opts(&mut words)?;
@@ -229,7 +276,7 @@ fn run_line(
             let args = args_for(&program, &function, &words, names)?;
             let r = if cmd == "call" { sim.call(&addr, account(&o.from), &function, args, o.value)? } else { sim.view(&addr, &function, args)? };
             report.log.push(format!("{line}\n{}", describe(&r, Some(&program))));
-            *last = Some((r, Some(program)));
+            *last = Some(Last::Call(r, Some(program)));
         }
         "upgrade" => {
             let o = take_opts(&mut words)?;
@@ -242,22 +289,34 @@ fn run_line(
             let src = read(&file)?;
             let preview = crate::compile(&src, &crate::CompileOptions::default()).map_err(|e| format!("{file}:{e}"))?;
             let args = args_for(&preview, "upgrade", &words, names)?;
-            let (rep, r) = sim.upgrade(&addr, account(&o.from), &src, args)?;
+            let (rep, r) = match sim.upgrade(&addr, account(&o.from), &src, args) {
+                Ok(x) => x,
+                Err(e) => {
+                    report.log.push(format!("{line}\n  rejected: {e}"));
+                    *last = Some(Last::Rejected(e));
+                    return Ok(());
+                }
+            };
             report.log.push(format!(
                 "upgrade {name} with {file} (added state: {}; notes: {})\n{}",
                 if rep.added_state.is_empty() { "-".into() } else { rep.added_state.join(", ") },
                 if rep.notes.is_empty() { "-".into() } else { rep.notes.join("; ") },
                 describe(&r, sim.program(&addr))
             ));
-            *last = Some((r, sim.program(&addr).cloned()));
+            *last = Some(Last::Call(r, sim.program(&addr).cloned()));
         }
         "authority" => {
             let o = take_opts(&mut words)?;
             let [name, who] = words.as_slice() else { return Err("usage: authority <name> <@account|none>".into()) };
             let addr = names.get(name).cloned().ok_or_else(|| format!("no deployed contract named '{name}'"))?;
             let new = if who == "none" { None } else { Some(account(who.trim_start_matches('@'))) };
-            sim.set_authority(&addr, account(&o.from), new)?;
-            report.log.push(line.to_string());
+            match sim.set_authority(&addr, account(&o.from), new) {
+                Ok(()) => report.log.push(line.to_string()),
+                Err(e) => {
+                    report.log.push(format!("{line}\n  rejected: {e}"));
+                    *last = Some(Last::Rejected(e));
+                }
+            }
         }
         "height" | "advance" => {
             let n: u64 = words.first().and_then(|w| w.parse().ok()).ok_or_else(|| format!("usage: {cmd} <blocks>"))?;
@@ -267,26 +326,39 @@ fn run_line(
         "expect" => {
             let what = words.first().cloned().ok_or("usage: expect ok|fail|result|event|balance|state ...")?;
             let rest = &words[1..];
-            let (r, program) = last.as_ref().map(|(r, p)| (Some(r), p.as_ref())).unwrap_or((None, None));
+            let rejected = match last {
+                Some(Last::Rejected(e)) => Some(e.clone()),
+                _ => None,
+            };
+            let (r, program) = match last {
+                Some(Last::Call(r, p)) => (Some(&*r), p.as_ref()),
+                _ => (None, None),
+            };
             let check = |ok: bool, msg: String| if ok { Ok(()) } else { Err(msg) };
             let outcome = match what.as_str() {
                 "ok" => {
+                    if let Some(e) = &rejected {
+                        return Err(format!("expected success, but it was rejected: {e}"));
+                    }
                     let r = r.ok_or("nothing to check yet")?;
                     check(r.result.is_ok(), format!("expected success, got: {}", r.result.as_ref().err().map(|e| e.to_string()).unwrap_or_default()))
                 }
                 "fail" => {
-                    let r = r.ok_or("nothing to check yet")?;
                     let needle = rest.join(" ");
                     let needle = needle.trim_matches('"');
-                    match &r.result {
-                        Ok(_) => Err("expected a failure, but the call succeeded".into()),
-                        Err(e) => check(e.to_string().contains(needle), format!("failure '{e}' does not contain '{needle}'")),
+                    match (&rejected, r) {
+                        (Some(e), _) => check(e.contains(needle), format!("rejection '{e}' does not contain '{needle}'")),
+                        (None, Some(r)) => match &r.result {
+                            Ok(_) => Err("expected a failure, but the call succeeded".into()),
+                            Err(e) => check(e.to_string().contains(needle), format!("failure '{e}' does not contain '{needle}'")),
+                        },
+                        (None, None) => Err("nothing to check yet".into()),
                     }
                 }
                 "result" => {
                     let r = r.ok_or("nothing to check yet")?;
                     let got = r.result.as_ref().map_err(|e| format!("the call failed: {e}"))?;
-                    let raw = rest.join(" ");
+                    let raw = substitute(&rest.join(" "), names, hrp);
                     let expected = match (program, &r.ret) {
                         (Some(p), t) if *t != Type::Unit => {
                             resolve_address(&raw, names).filter(|_| matches!(t, Type::Address)).map(Ok).unwrap_or_else(|| parse_arg_in(p, &raw, t))?
@@ -340,8 +412,8 @@ mod tests {
     #[test]
     fn runs_a_scenario() {
         let files: BTreeMap<&str, String> = [
-            ("counter.tccl", include_str!("../examples/counter.tccl").to_string()),
-            ("counter_v2.tccl", include_str!("../examples/counter_v2.tccl").to_string()),
+            ("counter.tccl", include_str!("../../../examples/counter.tccl").to_string()),
+            ("counter_v2.tccl", include_str!("../../../examples/counter_v2.tccl").to_string()),
         ]
         .into_iter()
         .collect();

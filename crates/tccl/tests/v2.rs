@@ -8,7 +8,7 @@ use tccl::{compile, CompileOptions, VmError};
 const TCN: u64 = 100_000_000;
 
 fn src(name: &str) -> String {
-    std::fs::read_to_string(format!("{}/examples/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+    std::fs::read_to_string(format!("{}/../../examples/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
 }
 
 fn int(v: i128) -> Value {
@@ -370,7 +370,7 @@ fn hostile_input_never_panics() {
     let alphabet: Vec<char> = "contract module use record enum interface role only grant revoke to from with value upgrade action view fn init state event let if else while for in return require send emit ( ) [ ] { } : , . -> = += == != < > + - * / % \n    \"x\" 0x12 123 a b c Order Phase.Open token.mint".split(' ').flat_map(|w| format!("{w} ").chars().collect::<Vec<_>>()).collect();
     let words: Vec<&str> = "contract module use record enum interface role only grant revoke to from with value upgrade action view fn init state event let if else while for in return require send emit ( ) [ ] : , . -> = += == != < > + - * / % \n \n    \"x\" 0x12 123 a b c Order Phase.Open token.mint std.token int text address list map".split(' ').collect();
     let _ = alphabet;
-    let base = std::fs::read_to_string(format!("{}/examples/orders.tccl", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let base = std::fs::read_to_string(format!("{}/../../examples/orders.tccl", env!("CARGO_MANIFEST_DIR"))).unwrap();
     for round in 0..3000 {
         let src = if round % 2 == 0 {
             (0..(next() % 80)).map(|_| words[(next() % words.len() as u64) as usize]).collect::<Vec<_>>().join(" ")
@@ -415,8 +415,11 @@ fn hostile_input_never_panics() {
 
 #[test]
 fn programs_round_trip_and_version_one_bytes_are_stable() {
-    for f in std::fs::read_dir(format!("{}/examples", env!("CARGO_MANIFEST_DIR"))).unwrap() {
+    for f in std::fs::read_dir(format!("{}/../../examples", env!("CARGO_MANIFEST_DIR"))).unwrap() {
         let path = f.unwrap().path();
+        if path.extension().is_none_or(|x| x != "tccl") {
+            continue;
+        }
         let s = std::fs::read_to_string(&path).unwrap();
         let p = compile(&s, &CompileOptions::default()).unwrap();
         assert_eq!(tccl::Program::from_bytes(&p.to_bytes()).unwrap(), p, "{}", path.display());

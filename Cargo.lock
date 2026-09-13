@@ -547,6 +547,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tccl-wasm"
+version = "0.2.0"
+dependencies = [
+ "hex",
+ "serde_json",
+ "tccl 0.2.0",
+]
+
+[[package]]
 name = "thiserror"
 version = "2.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"

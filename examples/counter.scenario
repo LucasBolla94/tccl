@@ -1,0 +1,15 @@
+# Recipe: a counter anyone can increase (state, actions, views, events).
+deploy counter.tccl as counter --from alice
+call counter increment 5 --from bob
+expect ok
+expect event Increased
+view counter get
+expect result 5
+view counter last
+expect result @bob
+call counter increment 500
+expect fail "at most 100"
+call counter increment 1 --value 1tcn
+expect fail "not payable"
+view counter get
+expect result 5

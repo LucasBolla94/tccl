@@ -1,0 +1,20 @@
+# Recipe: typed records, a status with allowed transitions, staff roles.
+deploy orders.tccl as shop --from boss
+call shop set_price "lamp" 5tcn --from boss
+call shop hire_shipper @sam --from boss
+call shop place "lamp" --from ann
+expect result 1
+call shop confirm 1 --from ann
+expect fail "Placed to Delivered"
+call shop pay 1 --from ann --value 5tcn
+expect ok
+call shop ship 1 --from ann
+expect fail "only shipper"
+call shop ship 1 --from sam
+expect event StatusChanged
+call shop cancel 1 --from ann
+expect fail "Shipped to Cancelled"
+call shop confirm 1 --from ann
+expect ok
+view shop order 1
+expect result {buyer: @ann, item: "lamp", price: 5tcn, status: Delivered}

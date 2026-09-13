@@ -1,0 +1,24 @@
+# Recipe: conditional payments — a hash lock, an arbiter and a refund deadline.
+deploy deals.tccl as deals --from anyone
+# hashlock = sha256("open sesame"); whoever reveals the secret pays the payee.
+call deals create_payment @seller @judge 0 0 0x41ef4bb0b23661e66301aac36066912dac037827b4ae63a7b1165a5aa93ed4eb --from buyer --value 5tcn
+expect result 1
+call deals reveal_payment 1 0x6775657373 --from courier
+expect fail "wrong secret"
+call deals reveal_payment 1 0x6f70656e20736573616d65 --from courier
+expect event PaymentReleased
+expect balance @seller 1000005tcn
+call deals refund_payment 1 --from buyer
+expect fail "no longer pending"
+# No hash lock, refundable by the buyer after height 50.
+call deals create_payment @seller @judge 0 50 0x --from buyer --value 3tcn
+expect result 2
+call deals refund_payment 2 --from buyer
+expect fail "not allowed yet"
+height 60
+call deals refund_payment 2 --from buyer
+expect event PaymentRefunded
+view deals payment_status 2
+expect result "Refunded"
+view deals locked_total
+expect result 0

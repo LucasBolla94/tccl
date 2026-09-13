@@ -1,0 +1,16 @@
+[package]
+name = "tccl-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "The TCCL compiler, VM and simulator compiled to WebAssembly for the browser playground"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tccl = { path = "../tccl" }
+serde_json.workspace = true
+hex.workspace = true

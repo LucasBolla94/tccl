@@ -1,0 +1,14 @@
+# Recipe: upgrading a contract with its upgrade authority (the deployer).
+deploy counter.tccl as counter --from dev
+call counter increment 5 --from bob
+upgrade counter counter_v2.tccl --from bob
+expect fail
+upgrade counter counter_v2.tccl --from dev
+expect ok
+call counter increment 2 --from bob
+view counter get
+expect result 25
+expect state counter step 10
+authority counter none --from dev
+upgrade counter counter_v2.tccl --from dev
+expect fail

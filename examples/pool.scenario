@@ -1,0 +1,24 @@
+# Recipe: a constant-product exchange (DEX) calling two token contracts.
+deploy cloud_coin.tccl as alpha 1000000 --from lp
+deploy cloud_coin.tccl as beta 1000000 --from lp
+deploy pool.tccl as pool $alpha $beta --from lp
+call alpha approve $pool 100000 --from lp
+call beta approve $pool 400000 --from lp
+call pool add_liquidity 100000 400000 --from lp
+expect ok
+expect event Added
+call alpha transfer @trader 10000 --from lp
+call alpha approve $pool 10000 --from trader
+view pool quote true 10000
+expect result 36264
+call pool swap true 10000 40000 --from trader
+expect fail "min_out"
+call pool swap true 10000 36000 --from trader
+expect result 36264
+expect event Swapped
+view beta balance_of @trader
+expect result 36264
+call pool swap true 1000 1 --from trader
+expect fail "allowance too small"
+view pool reserves
+expect result [110000, 363736, 199712]

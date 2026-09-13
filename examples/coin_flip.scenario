@@ -1,0 +1,27 @@
+# Recipe: a two-player game with commit-reveal (no fake randomness).
+# The host picked `true` and a secret of 32 bytes 0x07:
+#   commitment = sha256(0x0707…07 ++ 0x01)
+deploy coin_flip.tccl as game --from house
+call game create 0x842ef3c3b4e4a5b477257cff946cdaf69fbe8c739395f2b2e092039b830eb690 --from host --value 2tcn
+expect result 1
+call game join 1 true --from guest --value 1tcn
+expect fail "stake must match"
+call game join 1 true --from guest --value 2tcn
+expect event Joined
+call game reveal 1 0x0707070707070707070707070707070707070707070707070707070707070707 false --from host
+expect fail "does not match the commitment"
+call game reveal 1 0x0707070707070707070707070707070707070707070707070707070707070707 true --from host
+expect event Won
+expect balance @guest 1000002tcn
+view game stage_of 1
+expect result "Settled"
+# A host who never reveals loses after 20 blocks.
+call game create 0x842ef3c3b4e4a5b477257cff946cdaf69fbe8c739395f2b2e092039b830eb690 --from host --value 1tcn
+call game join 2 false --from guest --value 1tcn
+call game claim_timeout 2 --from guest
+expect fail "can still reveal"
+advance 21
+call game claim_timeout 2 --from guest
+expect ok
+view game stage_of 2
+expect result "Forfeited"

@@ -7,7 +7,7 @@ use tccl::VmError;
 const TCN: u64 = 100_000_000;
 
 fn src(name: &str) -> String {
-    std::fs::read_to_string(format!("{}/examples/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+    std::fs::read_to_string(format!("{}/../../examples/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
 }
 
 fn int(v: i128) -> Value {
@@ -20,8 +20,11 @@ fn addr(name: &str) -> Value {
 
 #[test]
 fn all_examples_compile() {
-    for f in std::fs::read_dir(format!("{}/examples", env!("CARGO_MANIFEST_DIR"))).unwrap() {
+    for f in std::fs::read_dir(format!("{}/../../examples", env!("CARGO_MANIFEST_DIR"))).unwrap() {
         let path = f.unwrap().path();
+        if path.extension().is_none_or(|x| x != "tccl") {
+            continue;
+        }
         let s = std::fs::read_to_string(&path).unwrap();
         tccl::compile(&s, &Default::default()).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     }

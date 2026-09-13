@@ -2298,8 +2298,11 @@ view supply() -> int:
 
     #[test]
     fn version_one_sources_are_accepted_by_version_two() {
-        for f in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/examples")).unwrap() {
+        for f in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples")).unwrap() {
             let path = f.unwrap().path();
+            if path.extension().is_none_or(|x| x != "tccl") {
+                continue;
+            }
             let src = std::fs::read_to_string(&path).unwrap();
             let v1 = compile(&src, &CompileOptions { version: 1, ..Default::default() });
             let Ok(v1) = v1 else { continue };
