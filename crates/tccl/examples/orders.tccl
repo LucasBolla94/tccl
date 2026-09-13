@@ -1,0 +1,79 @@
+# A small store: typed orders, a status with allowed transitions and staff roles.
+contract Orders
+
+enum Status:
+    Placed -> Paid, Cancelled
+    Paid -> Shipped, Refunded
+    Shipped -> Delivered
+    Delivered
+    Cancelled
+    Refunded
+
+record Order:
+    buyer: address
+    item: text
+    price: int
+    status: Status
+
+role manager
+role shipper
+
+state orders: map[int, Order]
+state next_id: int
+state prices: map[text, int]
+
+event StatusChanged(id: int, status: text)
+
+init():
+    grant manager to caller
+
+action set_price(item: text, price: int) only manager:
+    require len(item) >= 1 and len(item) <= 64, "item names have 1 to 64 bytes"
+    require price >= 0, "price cannot be negative"
+    prices[item] = price
+
+action hire_shipper(who: address) only manager:
+    grant shipper to who
+
+action fire_shipper(who: address) only manager:
+    revoke shipper from who
+
+action place(item: text) -> int:
+    require prices.has(item), "unknown item"
+    next_id += 1
+    orders[next_id] = Order(buyer: caller, item: item, price: prices[item], status: Status.Placed)
+    changed(next_id)
+    return next_id
+
+action pay(id: int) payable:
+    require orders.has(id), "unknown order"
+    require caller == orders[id].buyer, "only the buyer pays"
+    require value == orders[id].price, "wrong amount"
+    orders[id].status = Status.Paid
+    changed(id)
+
+action ship(id: int) only shipper:
+    orders[id].status = Status.Shipped
+    changed(id)
+
+action confirm(id: int):
+    require caller == orders[id].buyer, "only the buyer confirms"
+    orders[id].status = Status.Delivered
+    changed(id)
+
+action cancel(id: int):
+    require caller == orders[id].buyer, "only the buyer cancels"
+    orders[id].status = Status.Cancelled
+    changed(id)
+
+action refund(id: int) only manager:
+    let o: Order = orders[id]
+    orders[id].status = Status.Refunded
+    send(o.buyer, o.price)
+    changed(id)
+
+fn changed(id: int):
+    emit StatusChanged(id, to_text(orders[id].status))
+
+view order(id: int) -> Order:
+    return orders[id]

@@ -1,0 +1,82 @@
+# Two-player coin flip with commit–reveal.
+#
+# Nothing on a blockchain is random: block data can be predicted or influenced.
+# The host commits to a hidden choice (sha256 of a 32-byte secret and the choice),
+# the guest guesses in public, then the host reveals. A host who refuses to reveal
+# loses after REVEAL_BLOCKS.
+contract CoinFlip
+
+const REVEAL_BLOCKS: int = 20
+
+enum Stage:
+    Open -> Joined, Cancelled
+    Joined -> Settled, Forfeited
+    Settled
+    Cancelled
+    Forfeited
+
+record Game:
+    host: address
+    guest: address
+    stake: int
+    commitment: bytes
+    guess: bool
+    deadline: int
+    stage: Stage
+
+state games: map[int, Game]
+state count: int
+
+event Created(id: int, host: address, stake: int)
+event Joined(id: int, guest: address, guess: bool)
+event Won(id: int, winner: address, prize: int, how: text)
+
+action create(commitment: bytes) payable -> int:
+    require value > 0, "attach the stake"
+    require len(commitment) == 32, "commitment must be a sha256 hash"
+    count += 1
+    games[count] = Game(host: caller, guest: zero_address(), stake: value, commitment: commitment, guess: false, deadline: 0, stage: Stage.Open)
+    emit Created(count, caller, value)
+    return count
+
+action join(id: int, guess: bool) payable:
+    require games.has(id), "unknown game"
+    let g: Game = games[id]
+    require g.stage == Stage.Open, "game is not open"
+    require caller != g.host, "the host cannot join"
+    require value == g.stake, "stake must match"
+    games[id].guest = caller
+    games[id].guess = guess
+    games[id].deadline = height + REVEAL_BLOCKS
+    games[id].stage = Stage.Joined
+    emit Joined(id, caller, guess)
+
+action reveal(id: int, secret: bytes, choice: bool):
+    let g: Game = games[id]
+    require g.stage == Stage.Joined, "nothing to reveal"
+    require caller == g.host, "only the host reveals"
+    require len(secret) == 32, "secret must have 32 bytes"
+    require sha256(secret + to_bytes(choice)) == g.commitment, "secret does not match the commitment"
+    let winner: address = g.host
+    if g.guess == choice:
+        winner = g.guest
+    games[id].stage = Stage.Settled
+    send(winner, g.stake * 2)
+    emit Won(id, winner, g.stake * 2, "reveal")
+
+action claim_timeout(id: int):
+    let g: Game = games[id]
+    require g.stage == Stage.Joined, "game is not waiting for a reveal"
+    require height > g.deadline, "the host can still reveal"
+    games[id].stage = Stage.Forfeited
+    send(g.guest, g.stake * 2)
+    emit Won(id, g.guest, g.stake * 2, "timeout")
+
+action cancel(id: int):
+    let g: Game = games[id]
+    require caller == g.host, "only the host can cancel"
+    games[id].stage = Stage.Cancelled
+    send(g.host, g.stake)
+
+view stage_of(id: int) -> text:
+    return to_text(games[id].stage)

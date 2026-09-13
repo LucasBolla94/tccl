@@ -1,0 +1,19 @@
+# Event tickets as unique items (std.items). The organizer issues them; holders
+# can transfer or approve someone else (e.g. a resale contract).
+contract Tickets
+use std.items
+
+state organizer: address
+state capacity: int
+
+init(seats: int):
+    require seats > 0, "capacity must be positive"
+    organizer = caller
+    capacity = seats
+
+action issue(to: address, seat: text) -> int only organizer:
+    require items.count < capacity, "sold out"
+    return items.create(to, "ticket", seat)
+
+action check_in(id: int) only organizer:
+    items.burn_item(id)

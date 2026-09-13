@@ -1,0 +1,19 @@
+# A fungible token in a few lines: the standard token module plus a minter role.
+contract CloudCoin
+use std.token
+
+role minter
+
+init(supply: int):
+    token.setup("Cloud Coin", "CLD", 8)
+    grant minter to caller
+    token.mint(caller, supply)
+
+action mint(to: address, amount: int) only minter:
+    token.mint(to, amount)
+
+action add_minter(who: address) only minter:
+    grant minter to who
+
+action burn(amount: int):
+    token.burn(caller, amount)

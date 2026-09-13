@@ -1,0 +1,25 @@
+# Second version of counter.tccl, installed with an upgrade by the upgrade authority.
+# Existing state (count, last_caller) is kept; a new variable is added at the end.
+contract Counter
+
+state count: int
+state last_caller: address
+state step: int
+
+event Increased(by: address, amount: int, total: int)
+
+upgrade():
+    step = 10
+
+action increment(amount: int):
+    require amount > 0, "amount must be positive"
+    require amount <= 100, "at most 100 per call"
+    count += amount * step
+    last_caller = caller
+    emit Increased(caller, amount * step, count)
+
+view get() -> int:
+    return count
+
+view last() -> address:
+    return last_caller

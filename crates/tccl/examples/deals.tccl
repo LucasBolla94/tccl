@@ -1,0 +1,7 @@
+# Conditional payments (escrow with an arbiter, time locks and hash locks) using
+# the standard payments module. All actions come from std.payments.
+contract Deals
+use std.payments
+
+view about() -> text:
+    return "conditional payments: release, claim after a height, reveal a secret, refund"

@@ -1,0 +1,92 @@
+# Constant-product exchange pool (x × y = k) for two token contracts, 0.30 % fee.
+#
+# Calls other contracts through an interface. Inside the token, `caller` is this
+# pool, so traders first `approve` the pool on each token. Every call is atomic:
+# if a transfer fails, the whole swap is reverted.
+contract Pool
+
+interface Token:
+    action transfer(to: address, amount: int) -> bool
+    action transfer_from(from: address, to: address, amount: int) -> bool
+    view balance_of(who: address) -> int
+
+const FEE_BP: int = 30
+const BP: int = 10_000
+
+state token_a: address
+state token_b: address
+state reserve_a: int
+state reserve_b: int
+state total_shares: int
+state shares: map[address, int]
+
+event Added(provider: address, amount_a: int, amount_b: int, minted: int)
+event Removed(provider: address, amount_a: int, amount_b: int, burned: int)
+event Swapped(trader: address, sell_a: bool, amount_in: int, amount_out: int)
+
+init(a: address, b: address):
+    require a != b, "the two tokens must differ"
+    require is_contract(a) and is_contract(b), "both tokens must be contracts"
+    token_a = a
+    token_b = b
+
+action add_liquidity(amount_a: int, amount_b: int) -> int:
+    require amount_a > 0 and amount_b > 0, "amounts must be positive"
+    let minted: int = 0
+    if total_shares == 0:
+        minted = isqrt(amount_a) * isqrt(amount_b)
+    else:
+        minted = min(mul_div(amount_a, total_shares, reserve_a), mul_div(amount_b, total_shares, reserve_b))
+    require minted > 0, "liquidity too small"
+    # Effects first, then calls to other contracts.
+    reserve_a += amount_a
+    reserve_b += amount_b
+    total_shares += minted
+    shares[caller] += minted
+    require Token(token_a).transfer_from(caller, self, amount_a), "token A transfer failed"
+    require Token(token_b).transfer_from(caller, self, amount_b), "token B transfer failed"
+    emit Added(caller, amount_a, amount_b, minted)
+    return minted
+
+action remove_liquidity(burn: int):
+    require burn > 0 and burn <= shares[caller], "invalid share amount"
+    let out_a: int = mul_div(burn, reserve_a, total_shares)
+    let out_b: int = mul_div(burn, reserve_b, total_shares)
+    shares[caller] -= burn
+    total_shares -= burn
+    reserve_a -= out_a
+    reserve_b -= out_b
+    require Token(token_a).transfer(caller, out_a), "token A transfer failed"
+    require Token(token_b).transfer(caller, out_b), "token B transfer failed"
+    emit Removed(caller, out_a, out_b, burn)
+
+view quote(sell_a: bool, amount_in: int) -> int:
+    return output_for(sell_a, amount_in)
+
+fn output_for(sell_a: bool, amount_in: int) -> int:
+    require amount_in > 0, "amount must be positive"
+    require reserve_a > 0 and reserve_b > 0, "the pool is empty"
+    let with_fee: int = amount_in * (BP - FEE_BP)
+    if sell_a:
+        return mul_div(with_fee, reserve_b, reserve_a * BP + with_fee)
+    return mul_div(with_fee, reserve_a, reserve_b * BP + with_fee)
+
+action swap(sell_a: bool, amount_in: int, min_out: int) -> int:
+    let out: int = output_for(sell_a, amount_in)
+    require out > 0, "output too small"
+    require out >= min_out, "price moved: output below min_out"
+    if sell_a:
+        reserve_a += amount_in
+        reserve_b -= out
+        require Token(token_a).transfer_from(caller, self, amount_in), "payment failed"
+        require Token(token_b).transfer(caller, out), "payout failed"
+    else:
+        reserve_b += amount_in
+        reserve_a -= out
+        require Token(token_b).transfer_from(caller, self, amount_in), "payment failed"
+        require Token(token_a).transfer(caller, out), "payout failed"
+    emit Swapped(caller, sell_a, amount_in, out)
+    return out
+
+view reserves() -> list[int]:
+    return [reserve_a, reserve_b, total_shares]
