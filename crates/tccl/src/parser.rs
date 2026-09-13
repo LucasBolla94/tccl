@@ -250,7 +250,6 @@ impl Parser {
         let (name, _) = self.ident("enum name")?;
         self.expect(&Tok::Colon, "':' after the enum name")?;
         let mut variants = Vec::new();
-        let transitions;
         if self.check(&Tok::Newline) {
             // Block form: one variant per line, optionally `A -> B, C`.
             self.advance();
@@ -275,7 +274,7 @@ impl Parser {
             }
             self.expect(&Tok::Newline, "end of line")?;
         }
-        transitions = variants.iter().any(|v| !v.next.is_empty());
+        let transitions = variants.iter().any(|v| !v.next.is_empty());
         if variants.is_empty() {
             return Err(CompileError::new(pos, "an enum needs at least one variant"));
         }
