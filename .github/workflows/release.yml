@@ -84,7 +84,11 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: tccl-${{ matrix.target }}
-          path: dist/tccl*
+          path: |
+            dist/tccl*.tar.gz
+            dist/tccl*.zip
+            dist/tccl*.msi
+            dist/tccl*.deb
 
   engine:
     runs-on: ubuntu-latest
